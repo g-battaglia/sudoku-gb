@@ -1,5 +1,4 @@
 # Sudoku GB — Makefile (GBDK-2020, ROM ONLY 32KB)
-#
 # Usage:
 #   make              build build/sudoku.gb
 #   make run          build + open in mGBA
@@ -14,7 +13,7 @@ LCC = $(GBDK)/bin/lcc
 
 PROJECT = sudoku
 ROM = build/$(PROJECT).gb
-CSOURCES = src/board.c src/input.c src/main.c src/passwords.c src/puzzles.c src/puzzles_gen.c src/ui.c
+CSOURCES = src/board.c src/input.c src/main.c src/passwords.c src/puzzles.c src/puzzles_gen.c src/tiles.c src/ui.c
 
 # -msm83:gb = Game Boy target. -Wm-yn = ROM title. -Wl-yt0x00 = ROM ONLY.
 LCCFLAGS = -msm83:gb -Wm-yn"SUDOKU"

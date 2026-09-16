@@ -20,7 +20,7 @@ A complete, playable Sudoku game for real DMG hardware and emulators
 - Beating level N shows the **4-digit password** for level N+1.
 - Title screen: `NEW GAME` (from level 0) or `PASSWORD`
   (jump straight to a level with a code).
-- Text only, GBDK built-in font: **zero external graphic assets.**
+- Custom procedural tiles for the board (no external graphic assets).
 
 Explicitly OUT of scope (YAGNI):
 
@@ -117,28 +117,31 @@ code = ((((level + 1) * 7919 + 104729) ^ 0xBEEF) % 10000)  // 0..9999
 Single source of truth = `password_for_level()` in C; the printable
 table comes from `make passwords` (host test printing the codes).
 Honest NOTE in comments: not security, just anti-spoiler (formula is in ROM).
-## 4. Text rendering on 20x18 (built-in font, no custom tiles)
+## 4. Rendering: tile grid + sprite cursor (custom tiles, no assets)
 
-Screen = 20 columns x 18 rows of 8x8 chars via `font_init()+printf`.
+Text (menus, header, footer) uses the GBDK built-in font. The board is
+a custom tile grid (`src/tiles.*`, procedural 8x8 tiles, no PNG/assets):
 
 ```text
-r0:  SUDOKU GB       L01 EASY        <- title + level + difficulty
-r1:  MISTAKES: X X .                 <- 3 mistake slots (X = used)
+r0:  SUDOKU L01 EASY                   <- title + level + difficulty
+r1:  ERRORS X X .                      <- 3 mistake slots (X = used)
 r2:  (blank separator row)
-r3-11: 9 grid rows x 9 digits        <- cells "n" / "." + box spacing
-     e.g. "5 . .|3 . .|. . ."        <- '|' and '-' 3x3 separators (ASCII)
-r12: ----------------                <- separator (dashes)
-r13: ENTER: [ 5 ]                    <- proposed digit 1-9 (Up/Down, A confirms)
-r14-15: context help                 <- "A:ok B:del START:menu"
-r16-17: messages                     <- "MISTAKE!", "LOCKED", win password
+r3:  grid top frame (corner + top tiles)
+r4-12: 9 grid rows x 9 cells           <- 1 tile per cell, right+bottom
+     borders in-tile: 1px inside a 3x3 box, 2px between boxes/edges
+     (top/left borders come from neighbours or frame tiles)
+r13: ENTER: 5                           <- proposed digit (Up/Down, A confirms)
+r14-15: context help                    <- "UP/DN NUM A:OK" / "B:DEL START:MENU"
+r16: messages                           <- "MISTAKE!", "LOCKED CELL", ...
 ```
 
-Cursor = `[ ]` brackets around the cell; delta redraw only
-(erase old, draw new: no flicker, no per-frame cls).
-Givens vs entered: same digit; fixed ones cannot be erased (B ignored).
+Cursor = sprite 0 (8x8 outline, VRAM tile 240), moved with `move_sprite`;
+it overlays the cell so grid lines are never erased (no repaint needed).
+Given digits are black, player digits dark gray; `ui_cell(r,c)` redraws
+one cell, `ui_cursor(r,c)` just moves the sprite.
 ui_* screens: title (2 items), password entry (4 slots), pause
 (RESUME/RESTART/TITLE), win (password N+1 or "YOU WIN!"),
-game over (RETRY/TITLE). Only gotoxy/printf/setchar/cls.
+game over (RETRY/TITLE). Grid via `set_bkg_tiles`, text via gotoxy/printf.
 
 ## 5. Final controls (also shown in-game as help)
 
@@ -177,21 +180,21 @@ after each confirmed A; last level = completion screen.
 - `uint8_t input_dir(uint8_t mask)` — repeat-aware, for cursor movement.
 - Why: no double-count while held; smooth held movement.
 
-### 7.2 `src/ui.{h,c}` (~350 lines, biggest but text-only)
+### 7.2 `src/ui.{h,c}` + `src/tiles.{h,c}` [DONE] (tile grid + sprite cursor)
 
-- `ui_init()` — `font_init()`, `DISPLAY_ON`, `SHOW_BKG`.
+- `ui_init()` — `font_init()`, `tiles_load()`, sprite tile, `DISPLAY_ON`.
 - `ui_draw_title(sel)`, `ui_draw_password(digits, pos, bad)`,
-  `ui_draw_board_frame()` (header + separators, drawn once),
-  `ui_draw_cell(r,c)` (single cell: '.' or digit),
-  `ui_draw_cursor(old_r,old_c,new_r,new_c)` (move `[ ]`),
+  `ui_draw_board_frame()` (header + tile grid + footer, drawn once),
+  `ui_draw_cell(r,c)` (single cell tile: digit or empty, keeps borders),
+  `ui_draw_cursor(r,c)` (move sprite 0 outline),
   `ui_draw_status()` (mistakes + level),
-  `ui_draw_entry(value)`, `ui_message(msg)` (rows 16-17),
+  `ui_draw_entry(value)`, `ui_message(msg)` (row 16),
   `ui_draw_pause(sel)`, `ui_draw_win(level, next_pwd, is_last)`,
   `ui_draw_gameover(sel)`.
-- All with gotoxy/printf/setchar/cls only — no custom
-  `set_bkg_data` (system font is in VRAM after `font_init`).
+- `tiles.c`: procedural 8x8 tiles (3x5 digits + thin/thick borders),
+  loaded with `set_bkg_data` (BG tiles 96-176, font uses 0-95).
 
-### 7.3 `src/main.c` (~250 lines, simple)
+### 7.3 `src/main.c` [DONE] (states + flow)
 
 - `void main(void)`: init, start at `ST_TITLE`,
   one `switch(state)` loop with `vsync()`.
@@ -254,10 +257,10 @@ B on a given ignored, ROM <= 32768 bytes.
 
 1. [x] Toolchain (brew sdcc + vendored gbdk) + `gen_puzzles.py` + 12 puzzles.
 2. [x] `types/puzzles/passwords/board`, simple + commented (EN).
-3. [ ] `input.h/c` (debounce + repeat).
-4. [ ] `ui.h/c` (all text screens).
-5. [ ] `main.c` (states + flow).
-6. [ ] `Makefile` + `.gitignore` + `README.md` (commands + table + controls).
+3. [x] `input.h/c` (debounce + repeat).
+4. [x] `ui.h/c` + `tiles.h/c` (tile grid screens + sprite cursor).
+5. [x] `main.c` (states + flow).
+6. [x] `Makefile` + `.gitignore` + `README.md` (commands + table + controls).
 7. [ ] Green `make test-host` + ROM <= 32KB + full `make run` playthrough.
 8. [ ] Final commit.
 

@@ -52,6 +52,7 @@ make clean
 
 - `src/types.h` — constants. `src/board.*` — rules. `src/passwords.*` — codes.
 - `src/puzzles.*` + `src/puzzles_gen.c` (generated, do not edit).
-- `src/input.*` — joypad debounce. `src/ui.*` — text screens.
+- `src/input.*` — joypad debounce. `src/ui.*` — screens + tile grid + sprite cursor.
+- `src/tiles.*` — procedural 8x8 grid/frame/cursor tiles (no assets).
 - `src/main.c` — state machine. `tools/gen_puzzles.py` — generator.
 - `tests/test_host.c` — gcc tests. `PLAN.md` — full plan.

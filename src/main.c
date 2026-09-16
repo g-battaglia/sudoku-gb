@@ -74,7 +74,7 @@ static void start_level(uint8_t new_level)
         }
     }
     ui_game_full(level);
-    ui_cursor(cursor_row, cursor_col, cursor_row, cursor_col);
+    ui_cursor(cursor_row, cursor_col);
     ui_message("");
     state = ST_GAME;
 }
@@ -82,13 +82,9 @@ static void start_level(uint8_t new_level)
 /* Move the cursor by (dr, dc), wrapping at the edges. */
 static void move_cursor(int8_t dr, int8_t dc)
 {
-    uint8_t old_row, old_col;
-
-    old_row = cursor_row;
-    old_col = cursor_col;
     cursor_row = (uint8_t)((cursor_row + GRID_SIZE + dr) % GRID_SIZE);
     cursor_col = (uint8_t)((cursor_col + GRID_SIZE + dc) % GRID_SIZE);
-    ui_cursor(old_row, old_col, cursor_row, cursor_col);
+    ui_cursor(cursor_row, cursor_col);
     ui_message("");
 }
 
@@ -169,9 +165,9 @@ static void confirm_entry(void)
         /* Illegal move: reject it and count a mistake. */
         board_set(idx, 0);
         ui_cell(cursor_row, cursor_col);
-        ui_cursor(cursor_row, cursor_col, cursor_row, cursor_col);
         if (board_register_error()) {
             menu_choice = 0;
+            ui_cursor_hide();
             ui_gameover(menu_choice);
             state = ST_GAMEOVER;
         } else {
@@ -182,9 +178,9 @@ static void confirm_entry(void)
     }
     /* Legal move: show it and check for the win. */
     ui_cell(cursor_row, cursor_col);
-    ui_cursor(cursor_row, cursor_col, cursor_row, cursor_col);
     ui_message("");
     if (board_is_solved()) {
+        ui_cursor_hide();
         if (level + 1 < LEVEL_COUNT) {
             ui_win(level, password_for_level((uint8_t)(level + 1)), 0);
         } else {
@@ -244,7 +240,6 @@ static void game_update(void)
         if (!board_is_given(idx)) {
             board_set(idx, 0);
             ui_cell(cursor_row, cursor_col);
-            ui_cursor(cursor_row, cursor_col, cursor_row, cursor_col);
             ui_message("");
         } else {
             ui_message("LOCKED CELL");
@@ -266,7 +261,7 @@ static void pause_update(void)
         /* Back to the game: redraw everything (menu cleared it). */
         ui_game_full(level);
         ui_entry(entry_value);
-        ui_cursor(cursor_row, cursor_col, cursor_row, cursor_col);
+        ui_cursor(cursor_row, cursor_col);
         state = ST_GAME;
         return;
     }
@@ -274,7 +269,7 @@ static void pause_update(void)
         if (menu_choice == 0) {
             ui_game_full(level);
             ui_entry(entry_value);
-            ui_cursor(cursor_row, cursor_col, cursor_row, cursor_col);
+            ui_cursor(cursor_row, cursor_col);
             state = ST_GAME;
         } else if (menu_choice == 1) {
             start_level(level);
