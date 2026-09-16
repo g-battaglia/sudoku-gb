@@ -212,28 +212,30 @@ static void draw_centered(uint8_t y, const char *s)
 /* Draw one select row as a fixed 4-wide centered block (cols 8-11):
  * number + status char ('<' selected, pointing at the number, '*'
  * done, '-' else). Every row shows the same width, so every row is
- * perfectly symmetric. */
-static void select_draw_row(uint8_t page, uint8_t i, uint8_t row,
-                            const uint8_t *done)
+ * perfectly symmetric. `marks` is the battery-saved completion
+ * bitmap (one bit per level). */
+static void select_draw_row(uint8_t diff, uint8_t page, uint8_t i,
+                            uint8_t row, const uint8_t *marks)
 {
-    uint8_t n;
+    uint8_t r, n;
 
-    n = (uint8_t)(page * LEVELS_PER_PAGE + i);
-    text_tiles[0] = (uint8_t)('0' + (uint8_t)((n + 1) / 100) - 32);
-    text_tiles[1] = (uint8_t)('0' + (uint8_t)(((n + 1) / 10) % 10) - 32);
-    text_tiles[2] = (uint8_t)('0' + (uint8_t)((n + 1) % 10) - 32);
+    r = (uint8_t)(page * LEVELS_PER_PAGE + i); /* 0-99, shown */
+    n = (uint8_t)(diff * DIFF_LEVELS + r); /* absolute, bitmap index */
+    text_tiles[0] = (uint8_t)('0' + (uint8_t)((r + 1) / 100) - 32);
+    text_tiles[1] = (uint8_t)('0' + (uint8_t)(((r + 1) / 10) % 10) - 32);
+    text_tiles[2] = (uint8_t)('0' + (uint8_t)((r + 1) % 10) - 32);
     if (i == row) {
         text_tiles[3] = (uint8_t)('<' - 32);
     } else {
-        text_tiles[3] = (uint8_t)((done[n] ? '*' : '-') - 32);
+        text_tiles[3] = (uint8_t)((marks_get(marks, n) ? '*' : '-') - 32);
     }
     map_tiles(8, (uint8_t)(3 + i), 4, 1, text_tiles);
 }
 
 /* Status char of a select row (to redraw it when the marker moves). */
-static uint8_t select_status(uint8_t n, const uint8_t *done)
+static uint8_t select_status(uint8_t n, const uint8_t *marks)
 {
-    return (uint8_t)((done[n] ? '*' : '-') - 32);
+    return (uint8_t)((marks_get(marks, n) ? '*' : '-') - 32);
 }
 
 /* Draw the PAGE line: fixed 10-wide block (cols 5-14), symmetric. */
@@ -244,46 +246,35 @@ static void select_draw_page(uint8_t page)
     draw_text(12, 2, "/10");
 }
 
-/* Count beaten levels of one difficulty block (for "DONE x/100").
- * `done` points at the 100 marks of the current difficulty. */
-static uint8_t count_done(const uint8_t *done)
-{
-    uint8_t i, n;
-
-    n = 0;
-    for (i = 0; i < DIFF_LEVELS; i++) {
-        if (done[i]) {
-            n++;
-        }
-    }
-    return n;
-}
-
 /* Draw the select screen content (works hidden or visible). Title is
  * the difficulty name (always even width -> perfectly centered). */
 static void draw_select_content(uint8_t page, uint8_t row,
-                                const uint8_t *done, uint8_t diff)
+                                const uint8_t *marks, uint8_t diff)
 {
     uint8_t i;
 
     draw_centered(1, difficulty_name(diff));
     select_draw_page(page);
     for (i = 0; i < LEVELS_PER_PAGE; i++) {
-        select_draw_row(page, i, row, done);
+        select_draw_row(diff, page, i, row, marks);
     }
     draw_centered(14, "A PLAY LR PAGE");
     draw_centered(15, "B MODE");
     /* DONE line: fixed 12-wide block (cols 4-15): DONE ddd/100. */
     draw_text(4, 16, "DONE ");
-    draw_dec3(9, 16, count_done(done));
+    draw_dec3(9, 16, marks_count(marks,
+                                  (uint16_t)(diff * DIFF_LEVELS),
+                                  DIFF_LEVELS));
     draw_text(12, 16, "/");
     draw_text(13, 16, "100");
 }
 
 /* Draw the difficulty screen content (works hidden or visible).
  * Item names are all even width and individually centered; selection
- * shows a `>` and `<` pair flanking the name (symmetric marker). */
-static void draw_diff_content(uint8_t choice)
+ * shows a `>` and `<` pair flanking the name (symmetric marker).
+ * When `has_load` is set a fourth item LOAD (row 10) resumes the
+ * battery save. */
+static void draw_diff_content(uint8_t choice, uint8_t has_load)
 {
     uint8_t i, x, w;
 
@@ -296,6 +287,11 @@ static void draw_diff_content(uint8_t choice)
         map_tile((uint8_t)(x + w + 1), (uint8_t)(7 + i),
                  (uint8_t)((choice == i ? '<' : ' ') - 32));
         draw_text(x, (uint8_t)(7 + i), difficulty_name(i));
+    }
+    if (has_load) {
+        map_tile(6, 10, (uint8_t)((choice == DIFF_COUNT ? '>' : ' ') - 32));
+        map_tile(13, 10, (uint8_t)((choice == DIFF_COUNT ? '<' : ' ') - 32));
+        draw_text(8, 10, "LOAD");
     }
     draw_centered(13, "100 LEVELS");
     draw_centered(14, "A CHOOSE");
@@ -338,8 +334,11 @@ static void draw_game_content(void)
 }
 
 /* Pause menu items: all even width, individually centered; selection
- * shows a `>` and `<` pair flanking the item (symmetric marker). */
-static const char *PAUSE_ITEMS[4] = {"RESUME", "HINT", "PLAY AGAIN", "MENU"};
+ * shows a `>` and `<` pair flanking the item (symmetric marker).
+ * SAVE writes the battery save slot. */
+static const char *PAUSE_ITEMS[5] = {
+    "RESUME", "HINT", "SAVE", "PLAY AGAIN", "MENU"
+};
 static uint8_t pause_item_x(uint8_t i)
 {
     return (uint8_t)((SCREEN_COLS - text_w(PAUSE_ITEMS[i])) / 2);
@@ -361,7 +360,7 @@ static void draw_pause_content(uint8_t choice, uint8_t lid, uint8_t diff)
     draw_text(5, 3, "ERRORS ");
     draw_dec3(12, 3, board_errors());
     draw_text(1, 5, "------------------");
-    for (i = 0; i < 4; i++) {
+    for (i = 0; i < 5; i++) {
         x = pause_item_x(i);
         map_tile((uint8_t)(x - 2), (uint8_t)(6 + i),
                  (uint8_t)((choice == i ? '>' : ' ') - 32));
@@ -369,10 +368,10 @@ static void draw_pause_content(uint8_t choice, uint8_t lid, uint8_t diff)
                  (uint8_t)((choice == i ? '<' : ' ') - 32));
         draw_text(x, (uint8_t)(6 + i), PAUSE_ITEMS[i]);
     }
-    draw_text(1, 11, "------------------");
-    draw_centered(13, "A EDIT B ERASE");
-    draw_centered(14, "UP DOWN PICK");
-    draw_centered(15, "A OK B BACKS OUT");
+    draw_text(1, 12, "------------------");
+    draw_centered(14, "A EDIT B ERASE");
+    draw_centered(15, "UP DOWN PICK");
+    draw_centered(16, "A OK B BACKS OUT");
 }
 
 /* Draw the win screen content. */
@@ -442,38 +441,51 @@ void ui_init(void)
     refresh_OAM();
 }
 
-/* Difficulty select: EASY / MEDIUM / HARD (100 levels each). */
-void ui_diff(uint8_t choice)
+/* Difficulty select: EASY / MEDIUM / HARD (100 levels each), plus a
+ * LOAD item when `has_load` is set (valid battery save found). */
+void ui_diff(uint8_t choice, uint8_t has_load)
 {
     begin_draw();
     map_fill_view(FONT_BLANK);
-    draw_diff_content(choice);
+    draw_diff_content(choice, has_load);
     cursor_sprites_off();
     screen_present(LCDC_MENU);
 }
 
-/* Difficulty navigation: move the `>` marker (LCD stays on). */
+/* Difficulty navigation: move the marker pair (LCD stays on). Index
+ * DIFF_COUNT addresses the LOAD row (shown only when a save exists). */
 void ui_diff_cursor(uint8_t old_choice, uint8_t new_choice)
 {
     uint8_t w, x;
 
-    w = text_w(difficulty_name(old_choice));
-    x = (uint8_t)((SCREEN_COLS - w) / 2);
-    map_tile((uint8_t)(x - 2), (uint8_t)(7 + old_choice), (uint8_t)(' ' - 32));
-    map_tile((uint8_t)(x + w + 1), (uint8_t)(7 + old_choice), (uint8_t)(' ' - 32));
-    w = text_w(difficulty_name(new_choice));
-    x = (uint8_t)((SCREEN_COLS - w) / 2);
-    map_tile((uint8_t)(x - 2), (uint8_t)(7 + new_choice), (uint8_t)('>' - 32));
-    map_tile((uint8_t)(x + w + 1), (uint8_t)(7 + new_choice), (uint8_t)('<' - 32));
+    if (old_choice == DIFF_COUNT) {
+        map_tile(6, 10, (uint8_t)(' ' - 32));
+        map_tile(13, 10, (uint8_t)(' ' - 32));
+    } else {
+        w = text_w(difficulty_name(old_choice));
+        x = (uint8_t)((SCREEN_COLS - w) / 2);
+        map_tile((uint8_t)(x - 2), (uint8_t)(7 + old_choice), (uint8_t)(' ' - 32));
+        map_tile((uint8_t)(x + w + 1), (uint8_t)(7 + old_choice), (uint8_t)(' ' - 32));
+    }
+    if (new_choice == DIFF_COUNT) {
+        map_tile(6, 10, (uint8_t)('>' - 32));
+        map_tile(13, 10, (uint8_t)('<' - 32));
+    } else {
+        w = text_w(difficulty_name(new_choice));
+        x = (uint8_t)((SCREEN_COLS - w) / 2);
+        map_tile((uint8_t)(x - 2), (uint8_t)(7 + new_choice), (uint8_t)('>' - 32));
+        map_tile((uint8_t)(x + w + 1), (uint8_t)(7 + new_choice), (uint8_t)('<' - 32));
+    }
 }
 
-/* Level select: 100 levels of one difficulty, 10 per page. `done`
- * points at the 100 completion marks of `diff`. */
-void ui_select(uint8_t page, uint8_t row, const uint8_t *done, uint8_t diff)
+/* Level select: 100 levels of one difficulty, 10 per page. `marks`
+ * is the battery-saved completion bitmap (one bit per level). */
+void ui_select(uint8_t page, uint8_t row, const uint8_t *marks,
+               uint8_t diff)
 {
     begin_draw();
     map_fill_view(FONT_BLANK);
-    draw_select_content(page, row, done, diff);
+    draw_select_content(page, row, marks, diff);
     cursor_sprites_off();
     screen_present(LCDC_MENU);
 }
@@ -481,21 +493,23 @@ void ui_select(uint8_t page, uint8_t row, const uint8_t *done, uint8_t diff)
 /* Level-select navigation: move the `<' status char between rows
  * (redraws the old row's real status), LCD stays on. */
 void ui_select_cursor(uint8_t page, uint8_t old_row, uint8_t new_row,
-                       const uint8_t *done)
+                       const uint8_t *marks, uint8_t diff)
 {
     map_tile(11, (uint8_t)(3 + old_row),
-             select_status((uint8_t)(page * LEVELS_PER_PAGE + old_row), done));
+             select_status((uint8_t)(diff * DIFF_LEVELS +
+                                     page * LEVELS_PER_PAGE + old_row), marks));
     map_tile(11, (uint8_t)(3 + new_row), (uint8_t)('<' - 32));
 }
 
 /* Select page change: page line + rows only (LCD stays on, no reload). */
-void ui_select_page(uint8_t page, uint8_t row, const uint8_t *done)
+void ui_select_page(uint8_t page, uint8_t row, const uint8_t *marks,
+                    uint8_t diff)
 {
     uint8_t i;
 
     select_draw_page(page);
     for (i = 0; i < LEVELS_PER_PAGE; i++) {
-        select_draw_row(page, i, row, done);
+        select_draw_row(diff, page, i, row, marks);
     }
 }
 
@@ -509,8 +523,9 @@ void ui_game_full(uint8_t row, uint8_t col)
     screen_present(LCDC_GAME);
 }
 
-/* START menu: status + RESUME/HINT/RESTART/TITLE + help. `lid` is the
- * level number within the difficulty (0-99), `diff` the difficulty. */
+/* START menu: status + RESUME/HINT/SAVE/PLAY AGAIN/MENU + help.
+ * `lid` is the level number within the difficulty (0-99), `diff` the
+ * difficulty. */
 void ui_pause(uint8_t choice, uint8_t lid, uint8_t diff)
 {
     begin_draw();
@@ -542,6 +557,20 @@ void ui_win(uint8_t num, uint8_t is_last)
     begin_draw();
     map_fill_view(FONT_BLANK);
     draw_win_content(num, is_last);
+    cursor_sprites_off();
+    screen_present(LCDC_MENU);
+}
+
+/* Save confirmation screen: shown after SAVE in the START menu.
+ * Any button returns to the game (handled by main). */
+void ui_saved(void)
+{
+    begin_draw();
+    map_fill_view(FONT_BLANK);
+    draw_text(2, 6, "------------------");
+    draw_centered(8, "GAME SAVED");
+    draw_centered(10, "A BACK");
+    draw_text(2, 12, "------------------");
     cursor_sprites_off();
     screen_present(LCDC_MENU);
 }

@@ -307,6 +307,71 @@ check("hint locked vs erase", cell_tiles(cr, cc) == hinted)
 p.screen.image.save("/tmp/smoke_hint.png")
 check("hint pixels drawn", has_ink("/tmp/smoke_hint.png"))
 
+
+# --- Battery save ---------------------------------------------------------
+
+
+def sram_gate(on):
+    """Enable/disable SRAM through the MBC1 latch (like the game does)."""
+    p.memory[0x0000] = 0x0A if on else 0x00
+
+
+def sram_read():
+    sram_gate(True)
+    data = bytes(p.memory[0xA000:0xA000 + 0xD2])
+    sram_gate(False)
+    return data
+
+
+def sram_write(data):
+    sram_gate(True)
+    for i, b in enumerate(data):
+        p.memory[0xA000 + i] = b
+    sram_gate(False)
+
+
+def text_row(y):
+    """Visible text of map row y (font tile c = ASCII c - 32)."""
+    m = vis_map()
+    return "".join(chr(m[y * 32 + x] + 32) if m[y * 32 + x] < 96 else "#"
+                    for x in range(20))
+
+
+# 7s. SAVE from the START menu (RESUME/HINT/SAVE/...: down, down, A).
+swap(lambda: hold("start", 4), "text", "parked", "menu")
+hold("down", 4)
+idle(8)
+hold("down", 4)
+idle(8)
+swap(lambda: hold("a", 4), "text", "parked", "menu")
+check("save screen text", "GAME SAVED" in text_row(8))
+swap(lambda: hold("a", 4), "grid", "cursor", "game")
+
+# 7t. The slot in SRAM: magic, active game, level 101 (MEDIUM 001 =
+# index 100), valid checksum.
+sram = sram_read()
+check("save magic", sram[0:4] == b"SUDK")
+check("save game active", sram[5] == 1)
+check("save level", sram[6] | (sram[7] << 8) == 100)
+check("save checksum", (sum(sram[0:0xD1]) & 0xFF) == sram[0xD1])
+
+# 7u. Power-cycle: fresh emulator + injected SRAM = battery kept.
+p.stop()
+p = PyBoy(ROM, window="null")
+sram_write(sram)
+idle(300)
+check("boot shows LOAD row", text_row(10).strip() == "LOAD")
+
+# 7v. LOAD resumes the exact board: the hinted cell is back.
+hold("down", 4)
+idle(6)
+hold("down", 4)
+idle(6)
+hold("down", 4)
+idle(6)
+swap(lambda: hold("a", 4), "grid", "cursor", "game")
+check("load restores hint cell", cell_tiles(cr, cc) == hinted)
+
 # 8. Repeated hints -> readable win screen, A advances.
 # Every leg is frame-checked: LCD on, old-or-new only, coherent OAM.
 won = False
@@ -346,6 +411,31 @@ p.screen.image.save("/tmp/smoke_win.png")
 check("win pixels drawn", has_ink("/tmp/smoke_win.png"))
 if won:
     swap(lambda: hold("a", 4), "grid", "cursor", "game")
+
+# 8b. Power-cycle after the win: marks survive (star + DONE 001/100)
+# and the slot has no active game, so LOAD lands on the select screen.
+sram = sram_read()
+check("win save marks bit", (sram[0xAB + (100 >> 3)] >> (100 & 7)) & 1 == 1)
+check("win save inactive", sram[5] == 0)
+p.stop()
+p = PyBoy(ROM, window="null")
+sram_write(sram)
+idle(300)
+hold("down", 4)
+idle(6)
+hold("down", 4)
+idle(6)
+hold("down", 4)
+idle(6)
+swap(lambda: hold("a", 4), "text", "parked", "menu")
+check("load after win -> select", text_row(1).strip() == "MEDIUM")
+check("won level row selected", text_row(3).strip() == "001<")
+hold("down", 4)
+idle(8)
+check("completed star shown", text_row(3).strip() == "001*")
+check("next row selected", text_row(4).strip() == "002<")
+check("done count shown", text_row(16).strip() == "DONE 001/100")
+p.screen.image.save("/tmp/smoke_load.png")
 
 p.stop()
 print("SMOKE " + ("PASSED" if not FAILURES else f"FAILED: {FAILURES}"))

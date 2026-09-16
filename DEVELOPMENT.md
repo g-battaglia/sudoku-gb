@@ -48,10 +48,10 @@ to the compiler — they just happen to be written by Python scripts.
 - Arrays — `static uint8_t cells[81]` is 81 bytes in a row. `cells[i]`
   is element `i` (counting from 0). The grid is stored row by row, so
   cell `(row, col)` is `cells[row * 9 + col]`.
-- Pointers — an address in memory. `const uint8_t *done` means "the
+- Pointers — an address in memory. `const uint8_t *marks` means "the
   address of some bytes I will only read". `bytes + n` moves forward
   `n` bytes. You rarely need to think harder than that here.
-- `const` — "read-only": `const Puzzle puzzles[100]` lives in ROM and
+- `const` — "read-only": `const Puzzle puzzles[300]` lives in ROM and
   can never change. `const char *s` means "I promise not to modify
   your text".
 - `static` (on a function or variable) — "private to this file".
@@ -60,8 +60,8 @@ to the compiler — they just happen to be written by Python scripts.
   public API, listed in its header.
 - `enum` — a small set of named states. `ST_SELECT, ST_GAME, ...`
   reads better than `0, 1, ...` and the compiler treats them as such.
-- `struct` — several values grouped under one name. `Puzzle` bundles
-  a difficulty, 81 givens and 81 solution characters.
+- `struct` — several values grouped under one name. `SaveSlot`
+  bundles the saved game: level, values, origins, mistakes, marks.
 - `0x9800` — the `0x` prefix means hexadecimal (base 16). Memory
   addresses are written in hex by convention.
 
@@ -93,23 +93,27 @@ are deterministic — running twice produces byte-identical files.
 5. **`tests/test_host.c`** — executable documentation: it plays with
    the board on PC and asserts the rules (`assert(...)` crashes the
    test if a rule breaks). If you change `board.c`, run it.
-6. **`src/input.h` + `src/input.c`** — the Game Boy has no key
+6. **`src/save.h`, then `src/save.c`** — the battery save slot:
+   `SaveSlot` bundles one game in progress + the completion marks;
+   `save_read`/`save_write` do the SRAM access (§3.5).
+7. **`src/input.h` + `src/input.c`** — the Game Boy has no key
    *events*, only "buttons held right now". This module remembers last
    frame's buttons and reports each physical press once (`pressed`),
    plus auto-repeat for held directions (`dir`).
-7. **`src/main.c`** — the conductor. One `switch (state)` loop, one
+8. **`src/main.c`** — the conductor. One `switch (state)` loop, one
    small handler per state (`select_update`, `game_update`,
-   `pause_update`, `win_update`). It owns the cursor, the edit mode,
-   and the preview blink bookkeeping — but draws nothing itself: every
-   visual change is a `ui_*` call.
-8. **`src/ui.h`, then `src/ui.c`** — all drawing. Read the header
+   `pause_update`, `win_update`, `saved_update`). It owns the cursor,
+   the edit mode, the preview blink bookkeeping and the save/restore
+   flow — but draws nothing itself: every visual change is a `ui_*`
+   call.
+9. **`src/ui.h`, then `src/ui.c`** — all drawing. Read the header
    comment for the double-buffer design (§4), then one screen
    function at a time. Text is written as font tiles, never `printf`.
-9. **`src/tiles.h` + `src/tiles.c` + `tools/gen_tiles.py`** — the
-   precomputed grid artwork and the VRAM layout. The Python script
-   paints each 16x16 cell; the C side only copies bytes and computes
-   tile indices.
-10. **`tools/gen_puzzles.py`, `Makefile`** — puzzle generation
+10. **`src/tiles.h` + `src/tiles.c` + `tools/gen_tiles.py`** — the
+    precomputed grid artwork and the VRAM layout. The Python script
+    paints each 16x16 cell; the C side only copies bytes and computes
+    tile indices.
+11. **`tools/gen_puzzles.py`, `Makefile`** — puzzle generation
     (random full grid, dig holes while the solution stays unique;
     100 per difficulty, packed) and the build/test targets.
 
@@ -125,9 +129,11 @@ and cursor sprites are copied to `0x8000`), all 40 sprites are parked
 and copied to hardware OAM. Note the LCD flickers during init: GBDK's
 font loader turns it back on, so `ui_init` stops it a second time
 before the raw grid copy (raw copies have no PPU wait — they must run
-with the LCD off). Then `ui_diff(0)` presents the difficulty screen —
-that single LCDC write also turns the LCD on for good (A then opens
-the level select of that mode).
+with the LCD off). Then the battery save is read (`save_read`: if a
+valid slot exists, the completion marks are restored and the boot
+menu gains a LOAD item) and `ui_diff(0, has_save)` presents the
+difficulty screen — that single LCDC write also turns the LCD on for
+good (A then opens the level select of that mode).
 
 ### 3.2 One input frame
 
@@ -141,6 +147,7 @@ last — always in that order.
 ### 3.3 Editing a digit
 
 On a free cell, `A` calls `enter_editing()`: from now on Up/Down
+and Left/Right
 change `entry_value` instead of moving the cursor. Every frame,
 `preview_update()` draws or erases the blinking digit with
 `ui_preview()` — the **board is never touched** by the blink. `A`
@@ -150,14 +157,35 @@ for a win. `B` (`cancel_editing()`) erases the preview.
 
 ### 3.4 START menu and HINT
 
-`START` in game draws the pause screen (level, mistakes, cells left,
-four items) and switches state. `HINT` (`do_hint()`) picks the cursor
-cell if it is free, else the first free cell; writes the **solution**
-digit from ROM; locks the cell as a hint (gray like a player digit,
-but not editable); redraws the whole grid atomically — or records a
-win if the grid is full.
+`START` in game draws the pause screen (level, mistakes, five items:
+RESUME / HINT / SAVE / PLAY AGAIN / MENU) and switches state.
+`HINT` (`do_hint()`) picks the cursor cell if it is free, else the
+first free cell; writes the **solution** digit from ROM; locks the
+cell as a hint (gray like a player digit, but not editable); redraws
+the whole grid atomically — or records a win if the grid is full.
+`SAVE` snapshots the whole game into the battery save (`save_store`)
+and shows a confirmation screen.
 
-### 3.5 A screen swap (double buffer)
+### 3.5 The battery save
+
+The cartridge is an **MBC1 + RAM + battery** (`0x03`): a small SRAM
+at `0xA000-0xBFFF` that the battery keeps alive with the power off.
+The game cannot just write there — the MBC gates it behind a latch:
+`ENABLE_RAM` opens it, `DISABLE_RAM` closes it (`src/save.c` does
+exactly that around every access, so a crash mid-write cannot
+silently corrupt the slot).
+
+The slot holds one game in progress (level, 81 values, 81 origins,
+mistakes) plus the completion marks of all 300 levels (one bit each,
+38 bytes). A 4-byte magic, a version byte and a checksum guard it:
+first boot the SRAM is garbage, the checksum fails, and the boot
+menu simply hides `LOAD`. Reading is `save_read()` (restore marks +
+resume), writing is `save_write()` — on SAVE and on every win (so
+completions survive even without an explicit save). `board.c` owns
+the marks bitmap (`marks_*`), keeping the SRAM layout testable on
+PC with gcc.
+
+### 3.6 A screen swap (double buffer)
 
 `ui_pause()` (for example) does four steps: `begin_draw()` (draw into
 the hidden map) → clear + draw content → `cursor_sprites_off()`
@@ -231,7 +259,8 @@ visible map or shadow OAM.
 ## 6. Debugging checklist
 
 1. `make clean && make` — must build with **zero warnings**.
-2. `make check` — size ≤ 32 KB, Nintendo logo OK, cart `0x00`.
+2. `make check` — size 32 KB, Nintendo logo OK, cart `0x03`
+   (MBC1 + RAM + battery), 8 KB SRAM.
 3. `make test-host` — `ALL HOST TESTS PASSED`.
 4. `make test-emulator` — `SMOKE PASSED` (checks every transition
    frame-by-frame: no blank/mixed frame, OAM matches the screen).
@@ -248,6 +277,8 @@ visible map or shadow OAM.
 - **GBDK** — the C toolkit used here (vendored in `tools/gbdk/`).
 - **LCDC** — the LCD control register (one byte, one bit per feature).
 - **OAM** — sprite attribute memory (positions/tiles).
-- **ROM ONLY (`0x00`)** — a 32 KB cartridge with no save memory.
+- **MBC1 (`0x03`)** — the cartridge mapper: bank switching plus a
+  battery-kept SRAM at `0xA000-0xBFFF` (our save slot).
+- **SRAM** — cartridge RAM kept alive by the battery (the save).
 - **VBlank / vsync** — the between-frames pause / waiting for it.
 - **VRAM** — video memory (tile patterns + maps).

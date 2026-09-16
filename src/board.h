@@ -28,6 +28,13 @@
  * -------------------------------------------------------------------------*/
 
 #include "types.h"
+#include "puzzles.h"  /* LEVEL_COUNT for the marks bitmap */
+
+/* Cell origin codes: rendering shade + edit lock. They are stored in
+ * the battery save, so the numbering is part of the save format. */
+#define ORIGIN_PLAYER 0 /* gray, editable */
+#define ORIGIN_GIVEN 1 /* black, locked clue */
+#define ORIGIN_HINT 2 /* gray, locked reveal */
 
 /* Load level `level` (0-based, 0-299): reset grid and mistakes. */
 void board_load(uint16_t level);
@@ -62,5 +69,28 @@ void board_add_mistake(void);
 /* Lock cell `idx` as a hint reveal (used by HINT: the revealed digit
  * renders gray but stays locked). */
 void board_reveal(uint8_t idx);
+
+/* Origin of cell `idx` (ORIGIN_* above) — used by the save code to
+ * snapshot which digits are clues, hints or player entries. */
+uint8_t board_origin(uint8_t idx);
+
+/* Restore a full game in one shot (used by LOAD): copy values and
+ * origins (81 bytes each, ORIGIN_* codes) and the mistake count.
+ * Level bookkeeping stays in main.c. */
+void board_restore(const uint8_t *values, const uint8_t *origins,
+                   uint8_t mistakes);
+
+/* --- Level completion marks (battery-saved) -----------------------------
+ * One bit per level, packed LSB-first: MARKS_BYTES bytes cover all
+ * LEVEL_COUNT levels. The same layout is stored in SRAM, so saving
+ * and loading are plain copies. */
+#define MARKS_BYTES ((LEVEL_COUNT + 7) / 8) /* 38 for 300 levels */
+
+void marks_clear(uint8_t *bm);
+void marks_set(uint8_t *bm, uint16_t level);
+uint8_t marks_get(const uint8_t *bm, uint16_t level);
+
+/* Number of set marks among levels first..first+n-1 (DONE x/100). */
+uint8_t marks_count(const uint8_t *bm, uint16_t first, uint16_t n);
 
 #endif /* BOARD_H */

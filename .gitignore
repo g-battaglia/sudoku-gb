@@ -8,6 +8,7 @@ tools/gbdk/
 # Stray link outputs at root
 *.ihx
 *.gb
+*.sav
 # Temp
 /tmp/
 .DS_Store

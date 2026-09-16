@@ -187,6 +187,75 @@ static void test_solutions_valid(void)
     printf("solutions valid OK\n");
 }
 
+/* Completion marks bitmap: set/get round trip, boundaries, counting. */
+static void test_marks(void)
+{
+    uint8_t bm[MARKS_BYTES];
+
+    assert(MARKS_BYTES == 38); /* 300 levels -> 304 bits. */
+    marks_clear(bm);
+    assert(marks_count(bm, 0, LEVEL_COUNT) == 0);
+    assert(marks_get(bm, 0) == 0);
+    assert(marks_get(bm, LEVEL_COUNT - 1) == 0);
+
+    marks_set(bm, 0);
+    marks_set(bm, 1);
+    marks_set(bm, (uint16_t)(LEVEL_COUNT - 1));
+    assert(marks_get(bm, 0) == 1);
+    assert(marks_get(bm, 1) == 1);
+    assert(marks_get(bm, 2) == 0);
+    assert(marks_get(bm, (uint16_t)(LEVEL_COUNT - 1)) == 1);
+    assert(marks_count(bm, 0, LEVEL_COUNT) == 3);
+    assert(marks_count(bm, 0, DIFF_LEVELS) == 2); /* First two levels. */
+    assert(marks_count(bm, DIFF_LEVELS,
+                       (uint16_t)(LEVEL_COUNT - DIFF_LEVELS)) == 1);
+
+    /* Neighbouring levels must not leak into each other's bits. */
+    marks_clear(bm);
+    marks_set(bm, 7);
+    marks_set(bm, 8);
+    assert(marks_get(bm, 6) == 0);
+    assert(marks_get(bm, 9) == 0);
+    printf("marks OK\n");
+}
+
+/* SAVE/LOAD board snapshot: board_restore gives back the exact game
+ * (values, origins -> shading/locks, mistakes). */
+static void test_board_restore(void)
+{
+    uint8_t values[CELL_COUNT];
+    uint8_t origins[CELL_COUNT];
+    uint8_t i, idx;
+
+    board_load(5);
+    /* Make the board dirty: player digit, hint, mistake. */
+    for (idx = 0; idx < CELL_COUNT; idx++) {
+        if (!board_is_locked(idx)) {
+            break;
+        }
+    }
+    board_set(idx, puzzle_solution(5, idx));
+    board_reveal(idx);
+    board_add_mistake();
+    board_add_mistake();
+    for (i = 0; i < CELL_COUNT; i++) {
+        values[i] = board_get(i);
+        origins[i] = board_origin(i);
+    }
+
+    /* Trash the state, then restore the snapshot. */
+    board_load(200);
+    board_restore(values, origins, 2);
+    assert(board_errors() == 2);
+    assert(board_get(idx) == puzzle_solution(5, idx));
+    assert(board_is_locked(idx) == 1); /* Hint origin restored. */
+    for (i = 0; i < CELL_COUNT; i++) {
+        assert(board_get(i) == values[i]);
+        assert(board_origin(i) == origins[i]);
+    }
+    printf("board restore OK\n");
+}
+
 int main(void)
 {
     test_puzzles_valid();
@@ -195,6 +264,8 @@ int main(void)
     test_conflicts();
     test_mistakes();
     test_hint();
+    test_marks();
+    test_board_restore();
     printf("ALL HOST TESTS PASSED\n");
     return 0;
 }

@@ -1,8 +1,8 @@
 # Sudoku GB
 
 Sudoku for Game Boy Classic (DMG). 300 levels (100 EASY + 100 MEDIUM
-+ 100 HARD, selected at boot), hints, no save, no audio, no game over
-(infinite play, mistakes only tallied).
++ 100 HARD, selected at boot), hints, battery save (SRAM), no audio,
+no game over (infinite play, mistakes only tallied).
 Toolchain: GBDK-2020 4.5.0 (vendored in `tools/gbdk/`, gitignored;
 run `make setup-gbdk` once on a fresh clone). Everything in English.
 
@@ -17,7 +17,7 @@ Original clues are black; player digits and HINT reveals are dark gray.
 
 ```bash
 make setup-gbdk   # once: download GBDK 4.5.0 into tools/gbdk/
-make              # build/sudoku.gb (32KB ROM ONLY)
+make              # build/sudoku.gb (32KB ROM, MBC1 + battery SRAM)
 make run          # open in mGBA
 make check        # header + size checks
 make test-host    # PC logic tests (gcc)
@@ -29,16 +29,18 @@ make clean
 
 ## Controls
 
-- Boot: `SELECT MODE` (EASY / MEDIUM / HARD, 100 levels each).
+- Boot: `DIFFICULTY` (EASY / MEDIUM / HARD, 100 levels each) plus
+  `LOAD` when a battery save exists.
 - Select screen: Up/Down choose a row, Left/Right change page
   (10 pages of 10 levels), A plays, B goes back to the mode.
-  `*` = beaten this session; `DONE x/100` per mode.
+  `*` = beaten, `<` marks the cursor row; `DONE x/100` per mode.
 - D-Pad: move cursor (wraps at edges, auto-repeat when held)
 - A on a cell: digit-pick mode (picked digit blinks in the cell)
-  - Up/Down: pick digit 1-9, A: confirm, B: back (no change)
+  - Up/Right: next digit, Down/Left: previous (wraps 9-1);
+    A: confirm, B: back (no change)
   - Wrong digit = rejected + 1 mistake, keep picking
 - B: erase player digit (locked cells blink the cursor)
-- START: menu (RESUME / HINT / RESTART / TITLE) + status + help
+- START: menu (RESUME / HINT / SAVE / PLAY AGAIN / MENU) + status + help
 
 ## Rules
 
@@ -50,7 +52,14 @@ make clean
 - HINT reveals the true digit of a cell and locks it (free, unlimited).
   Hinted cells render gray like player digits but stay locked.
 - Full grid = win (conflicts are always rejected, puzzles are unique).
-- Progress marks are session-only: there is no save (ROM ONLY).
+- Battery save (one slot, kept by the cartridge battery):
+  - SAVE in the START menu stores the game in progress.
+  - Every win stores the completion marks (`*`, `DONE x/100`),
+    even without an explicit save.
+  - LOAD on the boot menu resumes the saved game, or lands on the
+    select screen of that mode with all marks restored.
+  - The slot is guarded by magic + version + checksum: a dead or
+    missing battery simply hides LOAD.
 
 ## LCD safety (real hardware)
 
@@ -65,9 +74,11 @@ the visible screen. Menus use no stdio: text is written as font tiles.
 
 ## Files
 
-- `src/types.h` — constants. `src/board.*` — rules + cell origins.
+- `src/types.h` — constants. `src/board.*` — rules + cell origins
+  + completion marks bitmap.
 - `src/puzzles.*` + `src/puzzles_gen.c` (generated, do not edit).
 - `src/input.*` — joypad debounce. `src/ui.*` — screens + tile grid.
+- `src/save.*` — battery save slot (SRAM read/write + checksum).
 - `src/tiles.*` + `src/tiles_gen.c` (generated) — precomputed grid art.
 - `src/main.c` — state machine. `tools/gen_puzzles.py`,
   `tools/gen_tiles.py` — deterministic generators.

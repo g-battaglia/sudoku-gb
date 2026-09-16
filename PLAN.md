@@ -1,11 +1,12 @@
 # PLAN.md — Sudoku for Game Boy Classic (DMG, .gb)
 
-> Target: **Game Boy Classic DMG, `.gb` ROM, no color, 32KB ROM ONLY.**
+> Target: **Game Boy Classic DMG, `.gb` ROM, no color, 32KB ROM,
+> MBC1 + battery SRAM (save).**
 > Toolchain: **GBDK-2020 4.5.0 + SDCC 4.6.0** (vendored in `tools/gbdk/`,
 > gitignored; `make setup-gbdk` re-downloads it on a fresh clone).
 > Principles: **clean code, YAGNI, explicit and well-commented code.**
-> User constraints: **single shot (no milestones), no save system,
-> no audio (for now), free level select, no passwords.**
+> User constraints: **single shot (no milestones), no audio (for now),
+> free level select, no passwords, battery save (added 2026-09-17).**
 > Language: **everything in English (docs, code, comments, UI strings).**
 >
 > NOTE (2026-09-16): the password system was removed entirely. There are
@@ -35,9 +36,9 @@ A complete, playable Sudoku game for real DMG hardware and emulators
 
 Explicitly OUT of scope (YAGNI):
 
-- Cartridge save (no MBC/SRAM/battery: ROM ONLY 32KB).
 - Audio/SFX/music. Pencil marks, timer, on-device generator.
 - SGB/CGB support (the game runs in DMG mode, also on CGB).
+- Multiple save slots (one battery slot is enough).
 
 ---
 
@@ -62,7 +63,8 @@ LR35902 CPU @ ~4.19MHz, 8KB WRAM, 8KB VRAM, 160x144 screen.
 32x32-tile background, 20x18 viewport of 8x8 tiles, 4 grays.
 Polled input with debounce at 60fps (`vsync()`), GBDK `J_*` joypad.
 Valid ROM header from `lcc`/`makebin` (Nintendo logo, checksums).
-`ROM ONLY` cartridge (0x00), no RAM: no save possible by design.
+MBC1+RAM+BATTERY cartridge (0x03), 8KB battery SRAM: one save slot.
+ROM stays 32KB (2 banks, no banking needed).
 ## 3. Architecture
 
 ### 3.1 File map (actual state)
@@ -73,13 +75,14 @@ Makefile                 <- GBDK build (+ setup-gbdk, test-emulator)
 src/
   types.h                [DONE] constants (9x9, screen 20x18)
   puzzles.h / puzzles.c  [DONE] Puzzle type + difficulty_name()
-  puzzles_gen.c          [GENERATED] 100 puzzles + solutions (gen_puzzles.py)
-  board.h / board.c      [DONE] state + rules (origins, hint locks)
+  puzzles_gen.c          [GENERATED] 300 puzzles + solutions (gen_puzzles.py)
+  board.h / board.c      [DONE] state + rules (origins, hint locks, marks)
   input.h / input.c      [DONE] joypad debounce (pressed + repeat)
+  save.h / save.c        [DONE] battery save slot (SRAM + checksum)
   tiles.h / tiles.c      [DONE] precomputed 16x16 grid + cursor tiles
   tiles_gen.c            [GENERATED] 230 grid + 4 cursor tiles (gen_tiles.py)
   ui.h / ui.c            [DONE] grid screens + tile-drawn text menus
-  main.c                 [DONE] state loop + edit-mode flow
+  main.c                 [DONE] state loop + edit-mode + save flow
 tools/
   gbdk/                  [DONE] vendored toolchain (gitignored, setup-gbdk)
   gen_puzzles.py         [DONE] generator, 100 unique verified puzzles
@@ -124,7 +127,7 @@ Generated file: NEVER edit by hand.
 ### 3.4 Passwords — REMOVED
 
 The password system was deleted (git history has it): all levels are
-freely selectable, progress marks are session-only.
+freely selectable, progress marks are battery-saved.
 ## 4. Rendering: fullscreen tile grid + 4-sprite cursor (no assets)
 
 The game screen is ONLY the board: 9x9 cells of 16x16 px (2x2 BG tiles)
@@ -153,20 +156,23 @@ patterns resident); text is font tiles, never stdio.
 | Context | Input | Action |
 |---|---|---|
 | Diff | Up/Down + A | Choose EASY / MEDIUM / HARD (100 levels each) |
+| Diff | LOAD + A | Resume the battery save (shown only if valid) |
 | Select | Up/Down + Left/Right + A, B | Play any level of the mode (`*` = beaten); B back to the mode |
 | Game | D-Pad | Cursor (wraps at edges, auto-repeat) |
 | Game | A on cell | Digit-pick mode (locked cells blink) |
-| Pick | Up/Down | Pick digit 1-9 (blinks in the cell) |
+| Pick | Up/Right, Down/Left | Next / previous digit (wraps 9-1, blinks in the cell) |
 | Pick | A / B | Confirm (conflict -> mistake, keep picking) / back |
 | Game | B | Erase player digit (locked cells blink) |
-| Game | START | Menu: RESUME / HINT / RESTART / TITLE |
+| Game | START | Menu: RESUME / HINT / SAVE / PLAY AGAIN / MENU |
 | Menus/Win | D-Pad + A (+B back) | Navigate, confirm, cancel |
 
 ## 6. States (main.c)
 
 ```text
-ST_TITLE (select, 10 pages) -> ST_GAME <-> ST_PAUSE
-ST_GAME -> ST_WIN (marks `*`) -> [A] next level, or select if last
+ST_DIFF -> ST_SELECT -> ST_GAME <-> ST_PAUSE
+ST_GAME -> ST_WIN (marks `*`, saves slot) -> [A] next level, or select if last
+ST_PAUSE -> ST_SAVED (SAVE item) -> [A/B] back to ST_GAME
+ST_DIFF + LOAD -> ST_GAME (resumed) or ST_SELECT (marks only)
 ```
 
 No game over, no retry screen: mistakes tallied forever. `board_load(level)`
@@ -201,31 +207,32 @@ on every level entry; win = `board_is_solved()` after each confirmed A
 
 ### 7.3 `src/main.c` [DONE] (states + edit-mode flow)
 
-- `void main(void)`: init, start at `ST_TITLE`,
+- `void main(void)`: init, read battery save, start at `ST_DIFF`,
   one `switch(state)` loop with `vsync()`.
-- Small handlers: `select_update()`, `game_update()` (navigation vs
-  digit-pick mode), `pause_update()` (RESUME/HINT/RESTART/TITLE),
-  `win_update()` — one main switch.
+- Small handlers: `diff_update()`, `select_update()`, `game_update()`
+  (navigation vs digit-pick mode), `pause_update()`
+  (RESUME/HINT/SAVE/PLAY AGAIN/MENU), `win_update()`,
+  `saved_update()` — one main switch.
 - State vars: `state, level, cursor_row/col, entry_value, editing,
-  completed[100], menu_choice, sel_page/row, win info, frame, flash,
-  preview tracker`.
+  marks[38], slot/has_save, menu_choice, sel_page/row, win info,
+  frame, flash, preview tracker`.
 - Mistakes via `board_errors()/board_add_mistake()` (counted only).
 - HINT via `board_reveal()` + `puzzles[level].solution` (locks the cell).
 
-### 7.4 `Makefile` (GBDK, ROM ONLY 32KB)
+### 7.4 `Makefile` (GBDK, 32KB ROM + battery SRAM)
 
 Keep it minimal and explicit:
 
 ```make
-LCCFLAGS = -msm83:gb -Wm-yn"SUDOKU" -Wl-yt0x00  # GB, title, ROM ONLY
-all / run / check (size+logo+cart) / test-host (gcc asserts) /
-test-emulator (PyBoy frame checks) / regen-puzzles / regen-tiles /
-setup-gbdk (fresh-clone bootstrap) / clean
+LCCFLAGS = -msm83:gb -Wm-yn"SUDOKU" -Wl-yt0x03 -Wl-ya1  # MBC1+RAM+BATT, 8KB SRAM
+all / run / check (size+logo+cart+sram) / test-host (gcc asserts) /
+test-emulator (PyBoy frame checks + save power-cycle) /
+regen-puzzles / regen-tiles / setup-gbdk (fresh-clone bootstrap) / clean
 ```
 ## 8. Build / Run / Test (macOS)
 
 ```bash
-make                 # build/sudoku.gb (ROM ONLY 32KB)
+make                 # build/sudoku.gb (32KB ROM, MBC1 + battery SRAM)
 make run             # open in mGBA
 make check           # ihxcheck + size check + header check
 make test-host       # gcc tests on PC: board rules + solutions

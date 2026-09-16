@@ -2,9 +2,9 @@
 
 > Snapshot for resuming work. 300 levels (100 EASY + 100 MEDIUM + 100
 > HARD, selected at boot), packed in ROM, double-buffered atomic
-> screens. Build is green AND headless-verified with PyBoy
-> (`make test-emulator`: 128 checks pass, every transition
-> frame-checked). All text/code in English.
+> screens, battery save (SRAM). Build is green AND headless-verified
+> with PyBoy (`make test-emulator`: every transition frame-checked,
+> including save → power-cycle → LOAD). All text/code in English.
 
 ---
 
@@ -12,18 +12,21 @@
 
 `/Users/giacomo/dev/sudoku-gb` is a complete Sudoku for Game Boy Classic
 (DMG) in C with GBDK-2020 4.5.0. The ROM builds clean (`make`, zero
-warnings) into `build/sudoku.gb` (ROM ONLY `0x00`, Nintendo logo OK,
-~27.8KB used of 32KB) and passes PC host tests plus a headless PyBoy
-smoke test. Game screen = **fullscreen 9x9 grid** (16x16 px cells,
-chunky 2x digits, black box/frame lines, dark-gray inner lines and
-player digits). Dynamics: D-Pad moves the cursor (solid 2px ring),
-**A = digit-pick mode** (Up/Down pick blinking digit, A confirm,
-B back), B erases, START menu has centered status + RESUME / HINT /
-RESTART / TITLE + 3-line help. **No game over** (mistakes tallied
-only). Boot = **mode select** (EASY / MEDIUM / HARD) then **free level
-select** (100 levels of that mode, 10 pages of 10, `*` = beaten this
-session, `B` returns to the mode). Original clues are black; player
-digits and HINT reveals are dark gray (hints stay locked).
+warnings) into `build/sudoku.gb` (MBC1+RAM+BATTERY `0x03`, 8KB SRAM,
+Nintendo logo OK, ~28KB used of 32KB) and passes PC host tests plus
+a headless PyBoy smoke test. Game screen = **fullscreen 9x9 grid**
+(16x16 px cells, chunky 2x digits, black box/frame lines, dark-gray
+inner lines and player digits). Dynamics: D-Pad moves the cursor
+(solid 2px ring), **A = digit-pick mode** (Up/Down and Left/Right
+pick the blinking digit, A confirm, B back), B erases, START menu
+has centered status + RESUME / HINT / SAVE / PLAY AGAIN / MENU +
+3-line help. **No game over** (mistakes tallied only). Boot =
+**mode select** (EASY / MEDIUM / HARD + LOAD when a valid battery
+save exists) then **free level select** (100 levels of that mode,
+10 pages of 10, `*` = beaten, `<` marks the cursor row, `B` returns
+to the mode). SAVE stores the game in progress; every win stores
+the marks. Original clues are black; player digits and HINT reveals
+are dark gray (hints stay locked).
 
 ---
 
@@ -32,23 +35,25 @@ digits and HINT reveals are dark gray (hints stay locked).
 - macOS ARM. `make`, `gcc`, PyBoy (headless verify), mGBA (user visual).
 - `sdcc 4.6.0` via Homebrew. GBDK-2020 4.5.0 in `tools/gbdk/`
   (gitignored; `make setup-gbdk` downloads `gbdk-macos-arm64.tar.gz`).
-- Flags: `-msm83:gb -Wm-yn"SUDOKU"` → cart type `0x00` (ROM ONLY, 32KB).
+- Flags: `-msm83:gb -Wm-yn"SUDOKU" -Wl-yt0x03 -Wl-ya1` → cart type
+  `0x03` (MBC1 + RAM + battery), 8KB SRAM, ROM still 32KB (2 banks).
 
 ```bash
 make setup-gbdk   # once per fresh clone
 make              # build build/sudoku.gb
 make run          # open in mGBA
-make check        # size <= 32KB + Nintendo logo + cart type
-make test-host    # gcc tests (logic, solutions, intro levels)
+make check        # size 32KB + logo + cart 0x03 + 8KB SRAM
+make test-host    # gcc tests (logic, solutions, marks, restore)
 make test-emulator # PyBoy smoke test (needs: pip install pyboy pillow)
 make regen-puzzles # regenerate src/puzzles_gen.c (seed 20260916)
 make regen-tiles   # regenerate src/tiles_gen.c
 make clean
 ```
 
-Last verified: zero warnings; `check` 32768 bytes / logo OK / cart 0x00;
-`test-host` ALL PASSED; `test-emulator` SMOKE PASSED (26 checks);
-real usage ~27.8KB (~4.9KB slack). Both generators deterministic
+Last verified: zero warnings; `check` 32768 bytes / logo OK / cart 0x03
+/ SRAM 8KB; `test-host` ALL PASSED; `test-emulator` SMOKE PASSED
+(164 checks, incl. save → power-cycle → LOAD and win-marks);
+real usage ~28KB (~4KB slack). Both generators deterministic
 (double run = identical md5).
 
 ---
@@ -143,9 +148,11 @@ Clean-code invariants (keep them):
   (165B/level) could never fit 300 levels in 32KB.
 - Difficulty = index range (level/100); host tests assert solution
   validity + intro givens.
-- Select: mode screen first (Up/Down + A), then 10 pages x 10 of that
-  mode (Up/Down row, Left/Right page, A play, B back to mode).
-  `completed[300]` session-only; `DONE x/100` counts the current mode.
+- Select: mode screen first (Up/Down + A; LOAD row when a valid
+  battery save exists), then 10 pages x 10 of that mode (Up/Down row,
+  Left/Right page, A play, B back to mode). `marks[38]` bitmap is the
+  single source of truth (`*` = beaten, `<` = cursor row, `<` on the
+  number means selected); `DONE x/100` counts the current mode.
 - HINT: cursor cell if empty+editable else first such cell; writes the
   solution digit (puzzle_solution), locks it, redraws; skips the grid
   redraw on a win.
@@ -153,13 +160,32 @@ Clean-code invariants (keep them):
   valid). Shows the level number WITHIN the mode (`LEVEL 001/100`);
   `is_last` = mode completed; A continues to the next level.
 
+### 4.6 Battery save (SRAM)
+
+- Cart `0x03` MBC1+RAM+BATTERY, 8KB SRAM (`-Wl-yt0x03 -Wl-ya1`).
+- One slot at `0xA000`: magic `SUDK` + version + game_active + level
+  + values[81] + origins[81] + mistakes + marks[38] + 8-bit checksum
+  (0xD2 bytes). `save.c` opens/closes the MBC latch around every
+  access (ENABLE_RAM / DISABLE_RAM).
+- SAVE (START menu item) writes the slot with game_active=1 and shows
+  the GAME SAVED screen; A/B returns to the game.
+- Every win rewrites the slot with game_active=0 (marks persist even
+  without an explicit save).
+- Boot: `save_read` validates; marks restored into RAM and the boot
+  menu gains LOAD. LOAD re-reads SRAM: game_active=1 → exact board
+  restored (`board_restore`, values + origins + mistakes); else →
+  select screen of that mode with marks/stars.
+- `marks_*` helpers live in `board.c` (PC-testable, same layout as
+  SRAM: zero conversion). Host tests cover set/get/count boundaries
+  and restore round trip.
+
 ---
 
 ## 5. Verification checklist (run after any change)
 
 ```bash
 make clean && make          # expect: exit 0, zero warnings
-make check                  # expect: Size OK, logo OK, cart 0x0
+make check                  # expect: Size OK, logo OK, cart 0x03, SRAM 8KB
 make test-host              # expect: ALL HOST TESTS PASSED
 make test-emulator          # expect: SMOKE PASSED (90+ checks)
 make run                    # visual check by the user (has display)

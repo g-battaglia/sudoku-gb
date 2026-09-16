@@ -9,11 +9,7 @@
 static uint8_t cells[CELL_COUNT];
 
 /* One origin per cell (single source of truth for shade + lock):
- * PLAYER = player digit (gray, editable), GIVEN = original clue
- * (black, locked), HINT = revealed by HINT (gray, locked). */
-#define ORIGIN_PLAYER 0
-#define ORIGIN_GIVEN 1
-#define ORIGIN_HINT 2
+ * codes are shared through board.h (part of the save format). */
 static uint8_t origin[CELL_COUNT];
 
 /* Mistakes made in the current game. */
@@ -134,4 +130,55 @@ void board_add_mistake(void)
 void board_reveal(uint8_t idx)
 {
     origin[idx] = ORIGIN_HINT;
+}
+
+/* Origin of cell `idx` (used by the save code). */
+uint8_t board_origin(uint8_t idx)
+{
+    return origin[idx];
+}
+
+/* Restore a full game in one shot (used by LOAD). */
+void board_restore(const uint8_t *values, const uint8_t *origins,
+                   uint8_t mistakes)
+{
+    uint8_t i;
+
+    for (i = 0; i < CELL_COUNT; i++) {
+        cells[i] = values[i];
+        origin[i] = origins[i];
+    }
+    error_count = mistakes;
+}
+
+/* --- Level completion marks (battery-saved) ---------------------------- */
+
+void marks_clear(uint8_t *bm)
+{
+    uint8_t i;
+
+    for (i = 0; i < MARKS_BYTES; i++) {
+        bm[i] = 0;
+    }
+}
+
+void marks_set(uint8_t *bm, uint16_t level)
+{
+    bm[level >> 3] |= (uint8_t)(1u << (level & 7));
+}
+
+uint8_t marks_get(const uint8_t *bm, uint16_t level)
+{
+    return (uint8_t)((bm[level >> 3] >> (level & 7)) & 1);
+}
+
+uint8_t marks_count(const uint8_t *bm, uint16_t first, uint16_t n)
+{
+    uint16_t level, count;
+
+    count = 0;
+    for (level = first; level < (uint16_t)(first + n); level++) {
+        count += marks_get(bm, level);
+    }
+    return (uint8_t)count;
 }

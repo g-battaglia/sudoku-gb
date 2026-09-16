@@ -4,26 +4,29 @@
 #include "board.h"
 #include "input.h"
 #include "puzzles.h"
+#include "save.h"
 #include "ui.h"
 
 /* ---------------------------------------------------------------------------
  * main.c — Game flow. One state machine, one small handler per state.
  *
- * States: DIFF -> SELECT -> GAME <-> PAUSE -> WIN.
- * Each frame: poll input once, run the current handler, wait for VBlank.
- * No game over: mistakes are only tallied (START menu) and play goes on.
+ * States: DIFF -> SELECT -> GAME <-> PAUSE -> WIN, plus SAVED (save
+ * confirmation). Each frame: poll input once, run the current handler,
+ * wait for VBlank. No game over: mistakes are only tallied (START
+ * menu) and play goes on.
  *
  * Boot asks for a difficulty (EASY / MEDIUM / HARD, 100 levels each).
- * All levels are freely playable, 10 per page. There are no passwords
- * and no unlocks: beaten levels just show `*` for the session.
+ * All levels are freely playable, 10 per page. Beaten levels show `*`
+ * and are kept in the battery save, together with one game in
+ * progress (SAVE in the START menu, LOAD on the boot menu).
  *
  * Game controls:
  *   D-Pad .... move cursor (wraps at grid edges)
  *   A ........ edit the cursor cell (digit-pick mode)
- *     Up/Down  pick the digit (blinks in the cell)
+ *     Up/Right, Down/Left: pick the digit (blinks in the cell)
  *     A ...... confirm, B = back without changing
  *   B ........ erase a player digit
- *   START .... pause menu (RESUME / HINT / RESTART / TITLE)
+ *   START .... pause menu (RESUME / HINT / SAVE / PLAY AGAIN / MENU)
  * -------------------------------------------------------------------------*/
 
 /* Game states. */
@@ -32,15 +35,17 @@ typedef enum {
     ST_SELECT,
     ST_GAME,
     ST_PAUSE,
-    ST_WIN
+    ST_WIN,
+    ST_SAVED
 } State;
 
 /* START menu items (matches the ui_pause item order). */
 #define MENU_RESUME 0
 #define MENU_HINT 1
-#define MENU_RESTART 2
-#define MENU_MENU 3
-#define MENU_COUNT 4
+#define MENU_SAVE 2
+#define MENU_RESTART 3
+#define MENU_MENU 4
+#define MENU_COUNT 5
 
 /* Current state. */
 static State state;
@@ -59,9 +64,14 @@ static uint8_t entry_value;
 /* 1 = digit-pick mode (Up/Down picks, A confirms, B cancels). */
 static uint8_t editing;
 
-/* Completed levels in this session (1 = beaten, shown with `*`).
- * Static storage starts at zero: nothing is complete at boot. */
-static uint8_t completed[LEVEL_COUNT];
+/* Completed levels (battery-saved bitmap: one bit per level, `*`).
+ * Static storage starts at zero; a valid SRAM save overwrites it. */
+static uint8_t marks[MARKS_BYTES];
+
+/* Battery save slot: read at boot (to know if LOAD must be shown and
+ * to restore the marks) and written on SAVE and on every win. */
+static SaveSlot slot;
+static uint8_t has_save;
 
 /* Pause menu selection (0-3). Select screen uses sel_page/sel_row. */
 static uint8_t menu_choice;
@@ -72,10 +82,11 @@ static uint8_t sel_row;
 
 /* Pending win screen (drawn on WIN state entry, flat from main: drawing
  * it nested inside the game update garbles the menu text, so win_now
- * only records it). */
+ * only records it). Same trick for the SAVED confirmation screen. */
 static uint8_t need_win_draw;
 static uint8_t win_level;
 static uint8_t win_last;
+static uint8_t need_saved_draw;
 
 /* Frame counter (blink timing) + mistake feedback (frames, cursor hidden). */
 static uint8_t frame;
@@ -148,17 +159,11 @@ static uint8_t level_in_diff(void)
     return (uint8_t)(level - (uint16_t)(sel_diff * DIFF_LEVELS));
 }
 
-/* Start (or restart) a level: reset board, cursor, mode. */
-static void start_level(uint16_t new_level)
+/* Put the cursor on the first editable cell (top-left). */
+static void cursor_first_editable(void)
 {
     uint8_t r, c;
 
-    level = new_level;
-    board_load(level);
-    entry_value = 1;
-    editing = 0;
-    flash = 0;
-    /* Put the cursor on the first editable cell. */
     cursor_row = 0;
     cursor_col = 0;
     for (r = 0; r < GRID_SIZE; r++) {
@@ -166,11 +171,21 @@ static void start_level(uint16_t new_level)
             if (!board_is_locked((uint8_t)(r * GRID_SIZE + c))) {
                 cursor_row = r;
                 cursor_col = c;
-                r = GRID_SIZE; /* Break outer loop too. */
-                break;
+                return;
             }
         }
     }
+}
+
+/* Start (or restart) a level: reset board, cursor, mode. */
+static void start_level(uint16_t new_level)
+{
+    level = new_level;
+    board_load(level);
+    entry_value = 1;
+    editing = 0;
+    flash = 0;
+    cursor_first_editable();
     preview_forget();
     ui_game_full(cursor_row, cursor_col);
     state = ST_GAME;
@@ -186,13 +201,35 @@ static void resume_game(void)
     state = ST_GAME;
 }
 
+/* Snapshot the current game + marks into battery SRAM.
+ * `active` = 1 from SAVE (resumable game), 0 after a win (marks only,
+ * so completions survive even without an explicit save). */
+static void save_store(uint8_t active)
+{
+    uint8_t i;
+
+    slot.game_active = active;
+    slot.level = level;
+    for (i = 0; i < CELL_COUNT; i++) {
+        slot.values[i] = board_get(i);
+        slot.origins[i] = board_origin(i);
+    }
+    slot.mistakes = board_errors();
+    for (i = 0; i < MARKS_BYTES; i++) {
+        slot.marks[i] = marks[i];
+    }
+    save_write(&slot);
+    has_save = 1;
+}
+
 /* Record the win for the current level. The screen itself is drawn on
  * WIN state entry (flat from main, never nested in the game update). */
 static void win_now(void)
 {
     uint8_t lid;
 
-    completed[level] = 1;
+    marks_set(marks, level);
+    save_store(0);
     ui_cursor_hide();
     preview_forget();
     lid = level_in_diff();
@@ -281,25 +318,66 @@ static void erase_cell(void)
     }
 }
 
-/* Difficulty handler: Up/Down = mode, A = choose. */
+/* LOAD from the boot menu: restore the marks and (if the save holds a
+ * game in progress) the exact board; otherwise land on the select
+ * screen of the saved difficulty. Re-reads SRAM so it sees the last
+ * save, even one made earlier in this session. */
+static void apply_load(void)
+{
+    uint8_t lid;
+
+    if (!save_read(&slot)) {
+        return; /* Should not happen: LOAD is only shown when valid. */
+    }
+    for (lid = 0; lid < MARKS_BYTES; lid++) {
+        marks[lid] = slot.marks[lid];
+    }
+    has_save = 1;
+    level = slot.level;
+    sel_diff = (uint8_t)(level / DIFF_LEVELS);
+    if (slot.game_active) {
+        board_restore(slot.values, slot.origins, slot.mistakes);
+        entry_value = 1;
+        editing = 0;
+        flash = 0;
+        cursor_first_editable();
+        preview_forget();
+        ui_game_full(cursor_row, cursor_col);
+        state = ST_GAME;
+    } else {
+        lid = level_in_diff();
+        sel_page = (uint8_t)(lid / LEVELS_PER_PAGE);
+        sel_row = (uint8_t)(lid % LEVELS_PER_PAGE);
+        ui_select(sel_page, sel_row, marks, sel_diff);
+        state = ST_SELECT;
+    }
+}
+
+/* Difficulty handler: Up/Down = mode (LOAD last, if a save exists),
+ * A = choose. */
 static void diff_update(void)
 {
-    uint8_t next;
+    uint8_t next, n;
 
+    n = (uint8_t)(DIFF_COUNT + (has_save ? 1 : 0));
     if (input_pressed(J_UP)) {
-        next = wrap_add(sel_diff, -1, DIFF_COUNT);
+        next = wrap_add(sel_diff, -1, n);
         ui_diff_cursor(sel_diff, next);
         sel_diff = next;
     }
     if (input_pressed(J_DOWN)) {
-        next = wrap_add(sel_diff, 1, DIFF_COUNT);
+        next = wrap_add(sel_diff, 1, n);
         ui_diff_cursor(sel_diff, next);
         sel_diff = next;
     }
     if (input_pressed(J_A) || input_pressed(J_START)) {
+        if (sel_diff == DIFF_COUNT) {
+            apply_load();
+            return;
+        }
         sel_page = 0;
         sel_row = 0;
-        ui_select(sel_page, sel_row, &completed[(uint16_t)sel_diff * DIFF_LEVELS], sel_diff);
+        ui_select(sel_page, sel_row, marks, sel_diff);
         state = ST_SELECT;
     }
 }
@@ -312,26 +390,24 @@ static void select_update(void)
 
     if (input_pressed(J_UP)) {
         next = wrap_add(sel_row, -1, LEVELS_PER_PAGE);
-        ui_select_cursor(sel_page, sel_row, next,
-                         &completed[(uint16_t)sel_diff * DIFF_LEVELS]);
+        ui_select_cursor(sel_page, sel_row, next, marks, sel_diff);
         sel_row = next;
     }
     if (input_pressed(J_DOWN)) {
         next = wrap_add(sel_row, 1, LEVELS_PER_PAGE);
-        ui_select_cursor(sel_page, sel_row, next,
-                         &completed[(uint16_t)sel_diff * DIFF_LEVELS]);
+        ui_select_cursor(sel_page, sel_row, next, marks, sel_diff);
         sel_row = next;
     }
     if (input_pressed(J_LEFT)) {
         sel_page = wrap_add(sel_page, -1, SELECT_PAGE_COUNT);
-        ui_select_page(sel_page, sel_row, &completed[(uint16_t)sel_diff * DIFF_LEVELS]);
+        ui_select_page(sel_page, sel_row, marks, sel_diff);
     }
     if (input_pressed(J_RIGHT)) {
         sel_page = wrap_add(sel_page, 1, SELECT_PAGE_COUNT);
-        ui_select_page(sel_page, sel_row, &completed[(uint16_t)sel_diff * DIFF_LEVELS]);
+        ui_select_page(sel_page, sel_row, marks, sel_diff);
     }
     if (input_pressed(J_B)) {
-        ui_diff(sel_diff);
+        ui_diff(sel_diff, has_save);
         state = ST_DIFF;
         return;
     }
@@ -353,9 +429,11 @@ static void game_update(void)
         return;
     }
     if (editing) {
-        if (input_dir(J_UP)) {
+        /* Pick the digit: Up/Right = next, Down/Left = previous
+         * (all wrap 9 -> 1). */
+        if (input_dir(J_UP) || input_dir(J_RIGHT)) {
             entry_value = (uint8_t)(entry_value % 9 + 1);
-        } else if (input_dir(J_DOWN)) {
+        } else if (input_dir(J_DOWN) || input_dir(J_LEFT)) {
             entry_value = (uint8_t)((entry_value + 7) % 9 + 1);
         }
         if (input_pressed(J_A)) {
@@ -419,7 +497,8 @@ static void do_hint(void)
     resume_game(); /* Full redraw already shows the revealed digit. */
 }
 
-/* Pause (START menu) handler: RESUME / HINT / RESTART / TITLE. */
+/* Pause (START menu) handler: RESUME / HINT / SAVE / PLAY AGAIN /
+ * MENU. */
 static void pause_update(void)
 {
     uint8_t next;
@@ -443,12 +522,25 @@ static void pause_update(void)
             resume_game();
         } else if (menu_choice == MENU_HINT) {
             do_hint();
+        } else if (menu_choice == MENU_SAVE) {
+            save_store(1);
+            need_saved_draw = 1;
+            state = ST_SAVED;
         } else if (menu_choice == MENU_RESTART) {
             start_level(level);
         } else {
-            ui_diff(sel_diff);
+            ui_diff(sel_diff, has_save);
             state = ST_DIFF;
         }
+    }
+}
+
+/* Save confirmation handler: any button goes back to the game. */
+static void saved_update(void)
+{
+    if (input_pressed(J_A) || input_pressed(J_B) ||
+        input_pressed(J_START)) {
+        resume_game();
     }
 }
 
@@ -459,7 +551,7 @@ static void win_update(void)
         if (!win_last) {
             start_level((uint16_t)(level + 1));
         } else {
-            ui_select(sel_page, sel_row, &completed[(uint16_t)sel_diff * DIFF_LEVELS], sel_diff);
+            ui_select(sel_page, sel_row, marks, sel_diff);
             state = ST_SELECT;
         }
     }
@@ -481,7 +573,17 @@ void main(void)
     sel_row = 0;
     menu_choice = 0;
     preview_forget();
-    ui_diff(sel_diff);
+
+    /* Battery save: restore the completion marks and remember whether
+     * the boot menu must offer LOAD. */
+    has_save = save_read(&slot);
+    if (has_save) {
+        for (i = 0; i < MARKS_BYTES; i++) {
+            marks[i] = slot.marks[i];
+        }
+    }
+
+    ui_diff(sel_diff, has_save);
     state = ST_DIFF;
 
     while (1) {
@@ -505,6 +607,13 @@ void main(void)
                 need_win_draw = 0;
             }
             win_update();
+            break;
+        case ST_SAVED:
+            if (need_saved_draw) {
+                ui_saved();
+                need_saved_draw = 0;
+            }
+            saved_update();
             break;
         }
         frame++;

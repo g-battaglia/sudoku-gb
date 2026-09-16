@@ -50,39 +50,46 @@ void ui_init(void);
 
 /* --- Screens (each hides the cursor and draws everything) --- */
 
-/* Difficulty select: EASY / MEDIUM / HARD (100 levels each). */
-void ui_diff(uint8_t choice);
+/* Difficulty select: EASY / MEDIUM / HARD (100 levels each) plus a
+ * LOAD row when `has_load` is set (valid battery save found).
+ * `choice` may be DIFF_COUNT to point at LOAD. */
+void ui_diff(uint8_t choice, uint8_t has_load);
 
-/* Difficulty navigation (call after ui_diff, LCD stays on, no reload). */
+/* Difficulty navigation (call after ui_diff, LCD stays on, no reload).
+ * Index DIFF_COUNT addresses the LOAD row. */
 void ui_diff_cursor(uint8_t old_choice, uint8_t new_choice);
 
 /* Level select: 100 levels of one difficulty, 10 per page. `page` 0-9,
- * `row` 0-9, `done` points at the 100 marks of `diff`, `done[i]` = 1
- * shows level i+1 as complete (`*`). Session-only. */
-void ui_select(uint8_t page, uint8_t row, const uint8_t *done,
+ * `row` 0-9, `marks` is the battery-saved completion bitmap
+ * (marks_get(marks, level) shows level+1 as complete `*`). */
+void ui_select(uint8_t page, uint8_t row, const uint8_t *marks,
                uint8_t diff);
 
 /* Select navigation (call after ui_select, LCD stays on, no reload):
  * move the `>` status char, or redraw the page rows on page change. */
 void ui_select_cursor(uint8_t page, uint8_t old_row, uint8_t new_row,
-                       const uint8_t *done);
-void ui_select_page(uint8_t page, uint8_t row, const uint8_t *done);
+                       const uint8_t *marks, uint8_t diff);
+void ui_select_page(uint8_t page, uint8_t row, const uint8_t *marks,
+                    uint8_t diff);
 
 /* Game screen: fullscreen grid + margins, cursor placed by us (no caller
  * can show a game frame before its OAM is ready). No text at all. */
 void ui_game_full(uint8_t row, uint8_t col);
 
-/* START menu. `choice` 0 = RESUME, 1 = HINT, 2 = PLAY AGAIN, 3 = MENU.
- * Shows the level (number within the difficulty), difficulty and
- * mistake count. */
+/* START menu. `choice` 0 = RESUME, 1 = HINT, 2 = SAVE, 3 = PLAY AGAIN,
+ * 4 = MENU. Shows the level (number within the difficulty), difficulty
+ * and mistake count. */
 void ui_pause(uint8_t choice, uint8_t lid, uint8_t diff);
 
 /* Pause navigation (call after ui_pause, LCD stays on, no reload). */
 void ui_pause_cursor(uint8_t old_choice, uint8_t new_choice);
 
+/* Save confirmation screen: any button returns to the game. */
+void ui_saved(void);
+
 /* Win screen (`num` = level number within the difficulty, 0-99;
- * `is_last` = difficulty completed). All levels are always playable,
- * progress marks are session-only. */
+ * `is_last` = difficulty completed). Completion marks are stored in
+ * the battery save. */
 void ui_win(uint8_t num, uint8_t is_last);
 
 /* --- Game screen updates (no full clear, called every frame) --- */
