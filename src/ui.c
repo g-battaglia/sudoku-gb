@@ -373,8 +373,8 @@ static void draw_pause_content(uint8_t choice, uint8_t level)
     }
     draw_text(1, 11, "------------------");
     draw_centered(13, "A EDIT B ERASE");
-    draw_centered(14, "UP DOWN PICK A OK");
-    draw_centered(15, "B BACKS OUT");
+    draw_centered(14, "UP DOWN PICK");
+    draw_centered(15, "A OK B BACKS OUT");
 }
 
 /* Draw the win screen content. */
