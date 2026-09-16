@@ -33,7 +33,13 @@ QUAD_OFF = [(0, 0), (8, 0), (0, 8), (8, 8)]
 
 
 def paint(value, is_user, row, col):
-    """16x16 cell pixels. Mirrors paint_cell() in src/tiles.c."""
+    """16x16 cell pixels. Baked into src/tiles_gen.c.
+
+    Line priority (painter's order): the outer frame and the black box
+    lines always win at crossings, so they stay solid: the right edge
+    keeps out of the top frame rows, and the bottom edge keeps out of
+    the right (box/frame) columns. Both skips key on the variant flags
+    (top row / box column), so every real cell maps to its tile."""
     px = [[W] * 16 for _ in range(16)]
     if 1 <= value <= 9:
         sh = G if is_user else B
@@ -43,14 +49,19 @@ def paint(value, is_user, row, col):
                     for dy in range(2):
                         for dx in range(2):
                             px[3 + r * 2 + dy][5 + p * 2 + dx] = sh
-    if row == 0:  # top outer frame, black 2px
+    if row == 0:  # top outer frame, black 2px, full width
         for x in range(16):
             px[0][x] = px[1][x] = B
     ln = B if col in (2, 5, 8) else G  # right edge
-    for y in range(16):
+    r0 = 2 if row == 0 else 0  # stop below the top frame
+    for y in range(r0, 16):
         px[y][14] = px[y][15] = ln
     ln = B if row in (2, 5, 8) else G  # bottom edge
-    for x in range(16):
+    # Stop before a black right line (box gap or outer frame): it owns
+    # the corner, so box/frame verticals stay unbroken. Elsewhere the
+    # bottom line runs full width (drawn last, it wins inner corners).
+    c1 = 14 if col in (2, 5, 8) else 16
+    for x in range(0, c1):
         px[14][x] = px[15][x] = ln
     return px
 

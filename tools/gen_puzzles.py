@@ -20,8 +20,10 @@ import sys
 # ---------------------------------------------------------------------------
 
 # (difficulty_name, puzzle_count, givens_target)
+# The first 10 EASY are introductory (48 givens): gentle onboarding.
 DIFFICULTIES = [
-    ("EASY", 34, 42),
+    ("EASY", 10, 48),
+    ("EASY", 24, 42),
     ("MEDIUM", 33, 34),
     ("HARD", 33, 29),
 ]

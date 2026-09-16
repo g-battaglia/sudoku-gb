@@ -8,8 +8,12 @@
 /* Working grid: 81 values 0-9, index = row * 9 + column. */
 static uint8_t cells[CELL_COUNT];
 
-/* Locked cells: 1 = given or revealed by HINT (not editable). */
-static uint8_t locked[CELL_COUNT];
+/* Original clues: 1 = fixed puzzle digit (black, never editable). */
+static uint8_t given[CELL_COUNT];
+
+/* Hint reveals: 1 = digit placed by HINT (gray like a player digit,
+ * but locked like a clue). */
+static uint8_t hinted[CELL_COUNT];
 
 /* Mistakes made in the current game. */
 static uint8_t error_count;
@@ -20,7 +24,7 @@ static uint8_t cell_index(uint8_t row, uint8_t col)
     return (uint8_t)(row * GRID_SIZE + col);
 }
 
-/* Load level `level` (0-based): reset grid, locks and mistakes. */
+/* Load level `level` (0-based): reset grid, origins and mistakes. */
 void board_load(uint8_t level)
 {
     uint8_t i;
@@ -29,7 +33,8 @@ void board_load(uint8_t level)
     givens = puzzles[level].givens;
     for (i = 0; i < CELL_COUNT; i++) {
         cells[i] = (uint8_t)(givens[i] - '0');
-        locked[i] = (uint8_t)(givens[i] != '0');
+        given[i] = (uint8_t)(givens[i] != '0');
+        hinted[i] = 0;
     }
     error_count = 0;
 }
@@ -40,10 +45,17 @@ uint8_t board_get(uint8_t idx)
     return cells[idx];
 }
 
-/* Return 1 if cell `idx` is locked (given or hint), 0 if editable. */
-uint8_t board_is_given(uint8_t idx)
+/* Return 1 if cell `idx` is an original clue (black, never editable). */
+uint8_t board_is_original(uint8_t idx)
 {
-    return locked[idx];
+    return given[idx];
+}
+
+/* Return 1 if cell `idx` is not editable (clue or hint), 0 if the
+ * player may change it. */
+uint8_t board_is_locked(uint8_t idx)
+{
+    return (uint8_t)(given[idx] || hinted[idx]);
 }
 
 /* Write `value` (0-9) into cell `idx`, unchecked. */
@@ -118,8 +130,9 @@ void board_add_mistake(void)
     }
 }
 
-/* Lock cell `idx` as a given (used by HINT). */
+/* Lock cell `idx` as a hint reveal (used by HINT). The digit renders
+ * gray like a player digit, but the cell stays locked like a clue. */
 void board_reveal(uint8_t idx)
 {
-    locked[idx] = 1;
+    hinted[idx] = 1;
 }

@@ -60,9 +60,6 @@ static uint8_t content_of(uint8_t value, uint8_t is_user)
 }
 
 /* Load the prebuilt grid + cursor tiles into VRAM (fast copy).
- * NOTE: split in two halves. GBDK's set_bkg_data miscounts a single
- * load of 230 tiles (works up to 127); two loads of 115 are exact. */
-/* Load the prebuilt grid + cursor tiles into VRAM (fast copy).
  * NOTE: hand-rolled copy, not set_bkg_data: GBDK's routine silently
  * drops the low tile range on big loads (tiles 0-114 came out zero
  * no matter the split or order), while a plain loop just works.

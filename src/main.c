@@ -101,7 +101,7 @@ static void preview_update(void)
     uint8_t idx, want, phase;
 
     idx = (uint8_t)(cursor_row * GRID_SIZE + cursor_col);
-    want = (editing && !board_is_given(idx));
+    want = (editing && !board_is_locked(idx));
     if (!want || pv_row != cursor_row || pv_col != cursor_col ||
         pv_val != entry_value) {
         preview_erase();
@@ -142,7 +142,7 @@ static void start_level(uint8_t new_level)
     cursor_col = 0;
     for (r = 0; r < GRID_SIZE; r++) {
         for (c = 0; c < GRID_SIZE; c++) {
-            if (!board_is_given((uint8_t)(r * GRID_SIZE + c))) {
+            if (!board_is_locked((uint8_t)(r * GRID_SIZE + c))) {
                 cursor_row = r;
                 cursor_col = c;
                 r = GRID_SIZE; /* Break outer loop too. */
@@ -195,7 +195,7 @@ static void enter_editing(void)
     uint8_t idx, current;
 
     idx = (uint8_t)(cursor_row * GRID_SIZE + cursor_col);
-    if (board_is_given(idx)) {
+    if (board_is_locked(idx)) {
         locked_feedback();
         return;
     }
@@ -246,7 +246,7 @@ static void erase_cell(void)
     uint8_t idx;
 
     idx = (uint8_t)(cursor_row * GRID_SIZE + cursor_col);
-    if (board_is_given(idx)) {
+    if (board_is_locked(idx)) {
         if (board_get(idx) != 0) {
             locked_feedback();
         }
@@ -262,20 +262,20 @@ static void erase_cell(void)
 static void select_update(void)
 {
     if (input_pressed(J_UP)) {
+        ui_select_cursor(sel_row, (uint8_t)((sel_row + LEVELS_PER_PAGE - 1) % LEVELS_PER_PAGE));
         sel_row = (uint8_t)((sel_row + LEVELS_PER_PAGE - 1) % LEVELS_PER_PAGE);
-        ui_select(sel_page, sel_row, completed);
     }
     if (input_pressed(J_DOWN)) {
+        ui_select_cursor(sel_row, (uint8_t)((sel_row + 1) % LEVELS_PER_PAGE));
         sel_row = (uint8_t)((sel_row + 1) % LEVELS_PER_PAGE);
-        ui_select(sel_page, sel_row, completed);
     }
     if (input_pressed(J_LEFT)) {
-        sel_page = (uint8_t)((sel_page + 9) % 10);
-        ui_select(sel_page, sel_row, completed);
+        sel_page = (uint8_t)((sel_page + SELECT_PAGE_COUNT - 1) % SELECT_PAGE_COUNT);
+        ui_select_page(sel_page, sel_row, completed);
     }
     if (input_pressed(J_RIGHT)) {
-        sel_page = (uint8_t)((sel_page + 1) % 10);
-        ui_select(sel_page, sel_row, completed);
+        sel_page = (uint8_t)((sel_page + 1) % SELECT_PAGE_COUNT);
+        ui_select_page(sel_page, sel_row, completed);
     }
     if (input_pressed(J_A) || input_pressed(J_START)) {
         start_level((uint8_t)(sel_page * LEVELS_PER_PAGE + sel_row));
@@ -336,10 +336,10 @@ static void do_hint(void)
     uint8_t idx, i, value;
 
     idx = (uint8_t)(cursor_row * GRID_SIZE + cursor_col);
-    if (board_is_given(idx) || board_get(idx) != 0) {
+    if (board_is_locked(idx) || board_get(idx) != 0) {
         idx = 0xFF;
         for (i = 0; i < CELL_COUNT; i++) {
-            if (!board_is_given(i) && board_get(i) == 0) {
+            if (!board_is_locked(i) && board_get(i) == 0) {
                 idx = i;
                 break;
             }
@@ -361,21 +361,18 @@ static void do_hint(void)
     }
     resume_game();
     ui_cell(cursor_row, cursor_col);
-    if (board_is_solved()) {
-        win_now();
-    }
 }
 
 /* Pause (START menu) handler: RESUME / HINT / RESTART / TITLE. */
 static void pause_update(void)
 {
     if (input_pressed(J_UP)) {
+        ui_pause_cursor(menu_choice, (uint8_t)((menu_choice + 3) % 4));
         menu_choice = (uint8_t)((menu_choice + 3) % 4);
-        ui_pause(menu_choice, level);
     }
     if (input_pressed(J_DOWN)) {
+        ui_pause_cursor(menu_choice, (uint8_t)((menu_choice + 1) % 4));
         menu_choice = (uint8_t)((menu_choice + 1) % 4);
-        ui_pause(menu_choice, level);
     }
     if (input_pressed(J_B) || input_pressed(J_START)) {
         resume_game();

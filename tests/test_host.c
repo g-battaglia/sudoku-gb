@@ -4,8 +4,9 @@
  * Compiles board.c + puzzles.c with gcc (NOT gbdk):
  *   make test-host
  *
- * Checks: puzzle strings valid, board rules (conflicts/win/givens),
- * mistake counter, hint locking.
+ * Checks: puzzle strings valid, solutions are valid Sudoku grids,
+ * first 10 levels are introductory (>= 48 givens), board rules
+ * (conflicts/win/origins), mistake counter, hint locking.
  * -------------------------------------------------------------------------*/
 
 #include <assert.h>
@@ -36,6 +37,11 @@ static void test_puzzles_valid(void)
         assert(puzzles[level].givens[CELL_COUNT] == '\0');
         assert(puzzles[level].solution[CELL_COUNT] == '\0');
         assert(givens >= 25); /* Sanity: a real puzzle, not empty. */
+        if (level < 10) {
+            /* Introductory levels: gentle onboarding. */
+            assert(puzzles[level].difficulty == DIFF_EASY);
+            assert(givens >= 48);
+        }
         printf("level %02d %-6s givens=%d OK\n",
                level + 1, difficulty_name(puzzles[level].difficulty), givens);
     }
@@ -52,7 +58,8 @@ static void test_board_load(void)
     for (i = 0; i < CELL_COUNT; i++) {
         uint8_t expected = (uint8_t)(puzzles[0].givens[i] - '0');
         assert(board_get(i) == expected);
-        assert(board_is_given(i) == (expected != 0));
+        assert(board_is_original(i) == (expected != 0));
+        assert(board_is_locked(i) == (expected != 0));
     }
     printf("board_load OK\n");
 }
@@ -114,7 +121,7 @@ static void test_hint(void)
     board_load(0);
     /* First editable cell. */
     for (idx = 0; idx < CELL_COUNT; idx++) {
-        if (!board_is_given(idx)) {
+        if (!board_is_locked(idx)) {
             break;
         }
     }
@@ -122,15 +129,63 @@ static void test_hint(void)
     value = (uint8_t)(puzzles[0].solution[idx] - '0');
     board_set(idx, value);
     assert(board_conflicts(idx) == 0); /* Solution digit is legal. */
+    assert(board_is_original(idx) == 0); /* Not a clue: renders gray. */
     board_reveal(idx);
-    assert(board_is_given(idx) == 1); /* Locked like a given now. */
+    assert(board_is_locked(idx) == 1); /* Hint locks the cell. */
+    assert(board_is_original(idx) == 0); /* ...but it is still not a clue. */
     assert(board_get(idx) == value);
     printf("hint OK\n");
+}
+
+/* Every stored solution is a valid Sudoku grid: each row, column
+ * and 3x3 box holds the digits 1-9 exactly once. */
+static void test_solutions_valid(void)
+{
+    uint8_t level, r, c, v;
+    uint8_t seen[10];
+
+    for (level = 0; level < LEVEL_COUNT; level++) {
+        for (r = 0; r < 9; r++) {
+            for (v = 0; v < 10; v++) {
+                seen[v] = 0;
+            }
+            for (c = 0; c < 9; c++) {
+                v = (uint8_t)(puzzles[level].solution[r * 9 + c] - '0');
+                assert(v >= 1 && v <= 9 && !seen[v]);
+                seen[v] = 1;
+            }
+            for (v = 0; v < 10; v++) {
+                seen[v] = 0;
+            }
+            for (c = 0; c < 9; c++) {
+                v = (uint8_t)(puzzles[level].solution[c * 9 + r] - '0');
+                assert(v >= 1 && v <= 9 && !seen[v]);
+                seen[v] = 1;
+            }
+        }
+        for (r = 0; r < 9; r += 3) {
+            for (c = 0; c < 9; c += 3) {
+                uint8_t dr, dc;
+                for (v = 0; v < 10; v++) {
+                    seen[v] = 0;
+                }
+                for (dr = 0; dr < 3; dr++) {
+                    for (dc = 0; dc < 3; dc++) {
+                        v = (uint8_t)(puzzles[level].solution[(r + dr) * 9 + c + dc] - '0');
+                        assert(v >= 1 && v <= 9 && !seen[v]);
+                        seen[v] = 1;
+                    }
+                }
+            }
+        }
+    }
+    printf("solutions valid OK\n");
 }
 
 int main(void)
 {
     test_puzzles_valid();
+    test_solutions_valid();
     test_board_load();
     test_conflicts();
     test_mistakes();

@@ -1,13 +1,19 @@
 # Sudoku GB — Makefile (GBDK-2020, ROM ONLY 32KB)
 # Usage:
+#   make setup-gbdk   download + extract GBDK 4.5.0 into tools/gbdk/
+#                     (needed once on a fresh clone; tools/gbdk/ is gitignored)
 #   make              build build/sudoku.gb
 #   make run          build + open in mGBA
 #   make check        header/size checks on the ROM
 #   make test-host    compile + run logic tests on PC (gcc)
+#   make test-emulator headless smoke test (needs: pip install pyboy pillow)
 #   make regen-puzzles regenerate src/puzzles_gen.c
+#   make regen-tiles   regenerate src/tiles_gen.c
 #   make clean        remove build output
 
 GBDK = tools/gbdk
+GBDK_VERSION = 4.5.0
+GBDK_URL = https://github.com/gbdk-2020/gbdk-2020/releases/download/$(GBDK_VERSION)/gbdk-macos-arm64.tar.gz
 LCC = $(GBDK)/bin/lcc
 
 PROJECT = sudoku
@@ -33,13 +39,21 @@ check: $(ROM)
 test-host: tests/test_host.c src/board.c src/puzzles.c src/puzzles_gen.c
 	gcc -Wall -Wextra -Isrc -o /tmp/sudoku_test tests/test_host.c src/board.c src/puzzles.c src/puzzles_gen.c && /tmp/sudoku_test
 
+test-emulator: $(ROM)
+	python3 tools/smoke_pyboy.py $(ROM)
+
 regen-puzzles:
 	python3 tools/gen_puzzles.py --seed=20260916
 
 regen-tiles:
 	python3 tools/gen_tiles.py
 
+setup-gbdk:
+	mkdir -p tools
+	curl -L -o /tmp/gbdk-macos-arm64.tar.gz $(GBDK_URL)
+	tar -xzf /tmp/gbdk-macos-arm64.tar.gz -C tools
+
 clean:
 	rm -rf build/*.gb build/*.ihx build/*.cdb build/*.map build/*.noi build/*.sym /tmp/sudoku_test
 
-.PHONY: all run check test-host regen-puzzles regen-tiles clean
+.PHONY: all run check test-host test-emulator regen-puzzles regen-tiles setup-gbdk clean

@@ -1,11 +1,18 @@
 # PLAN.md — Sudoku for Game Boy Classic (DMG, .gb)
 
 > Target: **Game Boy Classic DMG, `.gb` ROM, no color, 32KB ROM ONLY.**
-> Toolchain: **GBDK-2020 4.5.0 + SDCC 4.6.0** (vendored in `tools/gbdk/`).
+> Toolchain: **GBDK-2020 4.5.0 + SDCC 4.6.0** (vendored in `tools/gbdk/`,
+> gitignored; `make setup-gbdk` re-downloads it on a fresh clone).
 > Principles: **clean code, YAGNI, explicit and well-commented code.**
 > User constraints: **single shot (no milestones), no save system,
-> no audio (for now), free level select, passwords only as proof.**
+> no audio (for now), free level select, no passwords.**
 > Language: **everything in English (docs, code, comments, UI strings).**
+>
+> NOTE (2026-09-16): the password system was removed entirely. There are
+> now 100 free levels (10 intro EASY + 24 EASY + 33 MEDIUM + 33 HARD),
+> precomputed grid tiles, gray player/hint digits, atomic LCD-safe
+> screen transitions and delta menu redraws. Sections below marked
+> [HISTORIC] describe the old 12-level/password design.
 
 ---
 
@@ -14,15 +21,17 @@
 A complete, playable Sudoku game for real DMG hardware and emulators
 (primary: mGBA):
 
-- 12 free levels: 4 EASY + 4 MEDIUM + 4 HARD, all playable from boot.
+- 100 free levels: 10 introductory EASY (48 givens) + 24 EASY (42)
+  + 33 MEDIUM (34) + 33 HARD (29), all playable from boot.
 - 9x9 fullscreen grid, D-Pad navigation, A = digit-pick mode, erase.
 - No game over: mistakes are only tallied, play goes on forever.
-- HINT (START menu) reveals a cell digit and locks it.
-- Beating level N shows the **4-digit password** for level N+1.
-- Boot screen: `SELECT LEVEL` (all 12 free, `*` = beaten this session).
-- A password never unlocks: it only marks levels 1..N-1 `*` and jumps
-  to level N (restores the progress display, no save exists).
-- Custom procedural tiles for the board (no external graphic assets).
+- HINT (START menu) reveals a cell digit, renders it gray like a player
+  digit, and locks it.
+- Boot screen: `SELECT LEVEL` (100 levels, 10 per page, `*` = beaten).
+- Custom precomputed tiles for the board (no external graphic assets).
+- LCD-safe on real hardware: every GAME<->MENU switch stops the LCD
+  only via GBDK display_off() (VBlank), redraws fully while off, then
+  DISPLAY_ON once. Navigation never touches the LCD.
 
 Explicitly OUT of scope (YAGNI):
 
@@ -60,20 +69,22 @@ Valid ROM header from `lcc`/`makebin` (Nintendo logo, checksums).
 
 ```text
 PLAN.md                  <- this file
-Makefile                 <- GBDK build
+Makefile                 <- GBDK build (+ setup-gbdk, test-emulator)
 src/
-  types.h                [DONE] constants (9x9, 12 levels, screen)
+  types.h                [DONE] constants (9x9, 100 levels, screen)
   puzzles.h / puzzles.c  [DONE] Puzzle type + difficulty_name()
-  puzzles_gen.c          [GENERATED] 12 puzzles + solutions (gen_puzzles.py)
-  passwords.h/.c         [DONE] password formula, match, find
-  board.h / board.c      [DONE] state + rules (no game over, hint locks)
+  puzzles_gen.c          [GENERATED] 100 puzzles + solutions (gen_puzzles.py)
+  board.h / board.c      [DONE] state + rules (origins, hint locks)
   input.h / input.c      [DONE] joypad debounce (pressed + repeat)
-  tiles.h / tiles.c      [DONE] fullscreen 16x16 grid + cursor tiles
-  ui.h / ui.c            [DONE] grid screens + text menus
+  tiles.h / tiles.c      [DONE] precomputed 16x16 grid + cursor tiles
+  tiles_gen.c            [GENERATED] 230 grid + 4 cursor tiles (gen_tiles.py)
+  ui.h / ui.c            [DONE] grid screens + tile-drawn text menus
   main.c                 [DONE] state loop + edit-mode flow
 tools/
-  gbdk/                  [DONE] vendored toolchain (gbdk.tar.gz gitignored)
-  gen_puzzles.py         [DONE] generator, 12 unique verified puzzles
+  gbdk/                  [DONE] vendored toolchain (gitignored, setup-gbdk)
+  gen_puzzles.py         [DONE] generator, 100 unique verified puzzles
+  gen_tiles.py           [DONE] precomputed grid artwork generator
+  smoke_pyboy.py         [DONE] headless emulator smoke test
 build/                   .gb/.ihx/.map output (gitignored)
 ```
 
@@ -84,12 +95,12 @@ build/                   .gb/.ihx/.map output (gitignored)
 | `types.h` | Global `#define` only. | No |
 | `puzzles` | Level data + difficulty names. | No (ROM) |
 | `passwords` | `password_for_level/matches/find_level`. uint32 math only. | No |
-| `board` | `cells[81]`, `locked[81]`, load/get/set/conflicts/is_solved/errors/reveal. No game over: mistakes tallied only. | No |
+| `board` | `cells[81]`, `given[81]`, `hinted[81]`, load/get/locked/original/conflicts/is_solved/errors/reveal. No game over: mistakes tallied only. | No |
 | `input` | Reads `joypad()`, exposes edge `pressed` + D-Pad auto-repeat. | Yes (GBDK) |
-| `ui` | All drawing: font_init, cls, gotoxy/printf, grid, screens. | Yes (GBDK) |
+| `ui` | All drawing: tile text helpers, grid, screens; atomic LCD-safe transitions; delta menu redraws. | Yes (GBDK) |
 | `main` | State machine + flow, no direct drawing (calls ui_*). | Via ui/input |
 
-Clean-code rule: `board/passwords/puzzles` **never include `<gb/gb.h>`**,
+Clean-code rule: `board/puzzles` **never include `<gb/gb.h>`**,
 so they compile and run on PC with `gcc` (`make test-host`).
 
 ### 3.3 Puzzle format
@@ -112,7 +123,11 @@ a backtracking+MRV solver that checks uniqueness (cap 2) after each dig.
 Givens targets: 42/34/29. Regenerate with `python3 tools/gen_puzzles.py`.
 Generated file: NEVER edit by hand.
 
-### 3.4 Passwords (instead of a save system)
+### 3.4 Passwords — REMOVED [HISTORIC]
+
+The password system (formula + `passwords.h/.c` + entry screen) was
+deleted: 100 levels are freely selectable, progress marks are
+session-only. The text below is kept for history only.
 
 ```c
 code = ((((level + 1) * 7919 + 104729) ^ 0xBEEF) % 10000)  // 0..9999
@@ -151,8 +166,7 @@ N+1 or completion). Grid via `set_bkg_tiles`, menus via gotoxy/printf.
 
 | Context | Input | Action |
 |---|---|---|
-| Select | Up/Down + A | Play any of the 12 levels (`*` = beaten) |
-| Select | SELECT | Password entry (restores `*` marks, jumps) |
+| Select | Up/Down + Left/Right + A | Play any of the 100 levels (`*` = beaten) |
 | Game | D-Pad | Cursor (wraps at edges, auto-repeat) |
 | Game | A on cell | Digit-pick mode (locked cells blink) |
 | Pick | Up/Down | Pick digit 1-9 (blinks in the cell) |
@@ -165,8 +179,8 @@ N+1 or completion). Grid via `set_bkg_tiles`, menus via gotoxy/printf.
 ## 6. States (main.c)
 
 ```text
-ST_TITLE (select) -> ST_PASSWORD -> ST_GAME <-> ST_PAUSE
-ST_GAME -> ST_WIN (shows pwd N+1, marks `*`) -> [A] next level, or select if last
+ST_TITLE (select, 10 pages) -> ST_GAME <-> ST_PAUSE
+ST_GAME -> ST_WIN (marks `*`) -> [A] next level, or select if last
 ```
 
 No game over, no retry screen: mistakes tallied forever. `board_load(level)`
