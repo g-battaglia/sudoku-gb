@@ -29,8 +29,8 @@
 
 #include "types.h"
 
-/* Load level `level` (0-based): reset grid and mistakes. */
-void board_load(uint8_t level);
+/* Load level `level` (0-based, 0-299): reset grid and mistakes. */
+void board_load(uint16_t level);
 
 /* Value of cell `idx` (0-80, row by row): 0 = empty, 1-9 = digit. */
 uint8_t board_get(uint8_t idx);

@@ -10,8 +10,8 @@
  *   the outer frame in the side margins. No header, no footer, no
  *   messages: the board IS the screen. Everything else (level,
  *   mistakes, help) lives in the START menu.
- * - MENUS: GBDK font at 0x9000: level select (100 levels, 10 per
- *   page), START menu, win screen.
+ * - MENUS: GBDK font at 0x9000: difficulty select, level select
+ *   (100 levels per difficulty, 10 per page), START menu, win screen.
  *
  * Atomic screens: the DMG has two background maps, so every full
  * screen is drawn into the HIDDEN map while the LCD keeps showing the
@@ -38,11 +38,11 @@
 #define GRID_X 1
 #define GRID_Y 0
 
-/* Levels per select page (10 pages of 10). */
+/* Levels per select page (10 pages of 10 per difficulty). */
 #define LEVELS_PER_PAGE 10
 
-/* Select pages (LEVEL_COUNT / LEVELS_PER_PAGE). */
-#define SELECT_PAGE_COUNT (LEVEL_COUNT / LEVELS_PER_PAGE)
+/* Select pages (DIFF_LEVELS / LEVELS_PER_PAGE). */
+#define SELECT_PAGE_COUNT (DIFF_LEVELS / LEVELS_PER_PAGE)
 
 /* Init all video state once (tiles, maps, sprites). The LCD stays off:
  * the first screen (ui_select from main) presents it. */
@@ -50,9 +50,17 @@ void ui_init(void);
 
 /* --- Screens (each hides the cursor and draws everything) --- */
 
-/* Level select: 100 free levels, 10 per page. `page` 0-9, `row` 0-9,
- * `done[i]` = 1 shows level i+1 as complete (`*`). Session-only. */
-void ui_select(uint8_t page, uint8_t row, const uint8_t *done);
+/* Difficulty select: EASY / MEDIUM / HARD (100 levels each). */
+void ui_diff(uint8_t choice);
+
+/* Difficulty navigation (call after ui_diff, LCD stays on, no reload). */
+void ui_diff_cursor(uint8_t old_choice, uint8_t new_choice);
+
+/* Level select: 100 levels of one difficulty, 10 per page. `page` 0-9,
+ * `row` 0-9, `done` points at the 100 marks of `diff`, `done[i]` = 1
+ * shows level i+1 as complete (`*`). Session-only. */
+void ui_select(uint8_t page, uint8_t row, const uint8_t *done,
+               uint8_t diff);
 
 /* Select navigation (call after ui_select, LCD stays on, no reload):
  * move the `>` marker, or redraw the page rows on page change. */
@@ -64,15 +72,17 @@ void ui_select_page(uint8_t page, uint8_t row, const uint8_t *done);
 void ui_game_full(uint8_t row, uint8_t col);
 
 /* START menu. `choice` 0 = RESUME, 1 = HINT, 2 = RESTART, 3 = TITLE.
- * Shows level, mistake count and empty cells left. */
-void ui_pause(uint8_t choice, uint8_t level);
+ * Shows level (number within the difficulty), mistake count and empty
+ * cells left. */
+void ui_pause(uint8_t choice, uint8_t lid, uint8_t diff);
 
 /* Pause navigation (call after ui_pause, LCD stays on, no reload). */
 void ui_pause_cursor(uint8_t old_choice, uint8_t new_choice);
 
-/* Win screen (`is_last` = game completed). No passwords: all levels
- * are always playable, progress marks are session-only. */
-void ui_win(uint8_t level, uint8_t is_last);
+/* Win screen (`num` = level number within the difficulty, 0-99;
+ * `is_last` = difficulty completed). All levels are always playable,
+ * progress marks are session-only. */
+void ui_win(uint8_t num, uint8_t is_last);
 
 /* --- Game screen updates (no full clear, called every frame) --- */
 

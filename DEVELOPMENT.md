@@ -78,11 +78,12 @@ are deterministic — running twice produces byte-identical files.
 ## 2. How to read this codebase (in this order)
 
 1. **`README.md`** — what the game is and how to build it.
-2. **`src/types.h`** — every global constant (grid 9x9, 100 levels,
-   screen 20x18 tiles). Short; start here.
-3. **`src/puzzles.h` + `src/puzzles.c`** — the `Puzzle` struct
-   (difficulty + givens + solution) and the difficulty names. Skip
-   `puzzles_gen.c` (100 rows of generated digits).
+2. **`src/types.h`** — every global constant (grid 9x9, screen 20x18
+   tiles). Short; start here.
+3. **`src/puzzles.h` + `src/puzzles.c`** — the packed `Puzzle` struct
+   (52 bytes: solution nibbles + givens mask) and the
+   `puzzle_solution`/`puzzle_given`/`difficulty_name` helpers. Skip
+   `puzzles_gen.c` (300 generated tables).
 4. **`src/board.h`, then `src/board.c`** — the rules. Read the header
    comment first: it explains the three cell origins (player digit,
    original clue, hint reveal), conflict rejection, and the
@@ -109,8 +110,8 @@ are deterministic — running twice produces byte-identical files.
    paints each 16x16 cell; the C side only copies bytes and computes
    tile indices.
 10. **`tools/gen_puzzles.py`, `Makefile`** — puzzle generation
-    (random full grid, dig holes while the solution stays unique) and
-    the build/test targets.
+    (random full grid, dig holes while the solution stays unique;
+    100 per difficulty, packed) and the build/test targets.
 
 ---
 
@@ -124,9 +125,9 @@ and cursor sprites are copied to `0x8000`), all 40 sprites are parked
 and copied to hardware OAM. Note the LCD flickers during init: GBDK's
 font loader turns it back on, so `ui_init` stops it a second time
 before the raw grid copy (raw copies have no PPU wait — they must run
-with the LCD off). Then `ui_select(0, 0, completed)` draws the level
-list into the hidden map and presents it — that single LCDC write
-also turns the LCD on for good.
+with the LCD off). Then `ui_diff(0)` presents the difficulty screen —
+that single LCDC write also turns the LCD on for good (A then opens
+the level select of that mode).
 
 ### 3.2 One input frame
 

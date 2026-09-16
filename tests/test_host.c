@@ -16,34 +16,36 @@
 #include "puzzles.h"
 #include "types.h"
 
-/* All puzzles: 81 chars, valid digits, enough givens, solution matches. */
+/* All puzzles: valid digits, enough givens, solution matches mask. */
 static void test_puzzles_valid(void)
 {
-    uint8_t level, i;
-    uint8_t givens;
+    uint16_t level;
+    uint8_t i, givens;
+    uint8_t diff;
 
     for (level = 0; level < LEVEL_COUNT; level++) {
         givens = 0;
+        diff = (uint8_t)(level / DIFF_LEVELS);
         for (i = 0; i < CELL_COUNT; i++) {
-            char g = puzzles[level].givens[i];
-            char s = puzzles[level].solution[i];
-            assert(g >= '0' && g <= '9');
-            assert(s >= '1' && s <= '9');
-            if (g != '0') {
+            uint8_t g = puzzle_given(level, i);
+            uint8_t s = puzzle_solution(level, i);
+            assert(g <= 9);
+            assert(s >= 1 && s <= 9);
+            if (g != 0) {
                 givens++;
                 assert(g == s); /* Given cells match the solution. */
             }
         }
-        assert(puzzles[level].givens[CELL_COUNT] == '\0');
-        assert(puzzles[level].solution[CELL_COUNT] == '\0');
         assert(givens >= 25); /* Sanity: a real puzzle, not empty. */
         if (level < 10) {
-            /* Introductory levels: gentle onboarding. */
-            assert(puzzles[level].difficulty == DIFF_EASY);
+            /* Introductory levels: gentle EASY onboarding. */
+            assert(diff == DIFF_EASY);
             assert(givens >= 48);
         }
-        printf("level %02d %-6s givens=%d OK\n",
-               level + 1, difficulty_name(puzzles[level].difficulty), givens);
+        if ((level % DIFF_LEVELS) == 0) {
+            printf("levels %d-%d %-6s OK\n", level + 1,
+                   level + DIFF_LEVELS, difficulty_name(diff));
+        }
     }
 }
 
@@ -56,7 +58,7 @@ static void test_board_load(void)
     assert(board_errors() == 0);
     assert(!board_is_solved()); /* A fresh puzzle is not solved. */
     for (i = 0; i < CELL_COUNT; i++) {
-        uint8_t expected = (uint8_t)(puzzles[0].givens[i] - '0');
+        uint8_t expected = puzzle_given(0, i);
         assert(board_get(i) == expected);
         assert(board_is_original(i) == (expected != 0));
         assert(board_is_locked(i) == (expected != 0));
@@ -128,7 +130,7 @@ static void test_hint(void)
         }
     }
     assert(idx < CELL_COUNT);
-    value = (uint8_t)(puzzles[0].solution[idx] - '0');
+    value = puzzle_solution(0, idx);
     board_set(idx, value);
     assert(board_conflicts(idx) == 0); /* Solution digit is legal. */
     assert(board_is_original(idx) == 0); /* Not a clue: renders gray. */
@@ -143,7 +145,8 @@ static void test_hint(void)
  * and 3x3 box holds the digits 1-9 exactly once. */
 static void test_solutions_valid(void)
 {
-    uint8_t level, r, c, v;
+    uint16_t level;
+    uint8_t r, c, v;
     uint8_t seen[10];
 
     for (level = 0; level < LEVEL_COUNT; level++) {
@@ -152,7 +155,7 @@ static void test_solutions_valid(void)
                 seen[v] = 0;
             }
             for (c = 0; c < 9; c++) {
-                v = (uint8_t)(puzzles[level].solution[r * 9 + c] - '0');
+                v = puzzle_solution(level, (uint8_t)(r * 9 + c));
                 assert(v >= 1 && v <= 9 && !seen[v]);
                 seen[v] = 1;
             }
@@ -160,7 +163,7 @@ static void test_solutions_valid(void)
                 seen[v] = 0;
             }
             for (c = 0; c < 9; c++) {
-                v = (uint8_t)(puzzles[level].solution[c * 9 + r] - '0');
+                v = puzzle_solution(level, (uint8_t)(c * 9 + r));
                 assert(v >= 1 && v <= 9 && !seen[v]);
                 seen[v] = 1;
             }
@@ -173,7 +176,7 @@ static void test_solutions_valid(void)
                 }
                 for (dr = 0; dr < 3; dr++) {
                     for (dc = 0; dc < 3; dc++) {
-                        v = (uint8_t)(puzzles[level].solution[(r + dr) * 9 + c + dc] - '0');
+                        v = puzzle_solution(level, (uint8_t)((r + dr) * 9 + c + dc));
                         assert(v >= 1 && v <= 9 && !seen[v]);
                         seen[v] = 1;
                     }

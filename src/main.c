@@ -9,13 +9,13 @@
 /* ---------------------------------------------------------------------------
  * main.c — Game flow. One state machine, one small handler per state.
  *
- * States: SELECT -> GAME <-> PAUSE -> WIN.
+ * States: DIFF -> SELECT -> GAME <-> PAUSE -> WIN.
  * Each frame: poll input once, run the current handler, wait for VBlank.
  * No game over: mistakes are only tallied (START menu) and play goes on.
  *
- * Select screen: all 100 levels are freely playable from boot, 10 per
- * page. There are no passwords and no unlocks: beaten levels just show
- * `*` for the session.
+ * Boot asks for a difficulty (EASY / MEDIUM / HARD, 100 levels each).
+ * All levels are freely playable, 10 per page. There are no passwords
+ * and no unlocks: beaten levels just show `*` for the session.
  *
  * Game controls:
  *   D-Pad .... move cursor (wraps at grid edges)
@@ -28,6 +28,7 @@
 
 /* Game states. */
 typedef enum {
+    ST_DIFF,
     ST_SELECT,
     ST_GAME,
     ST_PAUSE,
@@ -44,8 +45,9 @@ typedef enum {
 /* Current state. */
 static State state;
 
-/* Current level (0-based). */
-static uint8_t level;
+/* Current level (0-based, 0-299) and difficulty (0-2). */
+static uint16_t level;
+static uint8_t sel_diff;
 
 /* Cursor position on the grid. */
 static uint8_t cursor_row;
@@ -140,8 +142,14 @@ static uint8_t wrap_add(uint8_t v, int8_t d, uint8_t n)
     return (uint8_t)((v + n + d) % n);
 }
 
+/* Level number within the difficulty (0-99). */
+static uint8_t level_in_diff(void)
+{
+    return (uint8_t)(level - (uint16_t)(sel_diff * DIFF_LEVELS));
+}
+
 /* Start (or restart) a level: reset board, cursor, mode. */
-static void start_level(uint8_t new_level)
+static void start_level(uint16_t new_level)
 {
     uint8_t r, c;
 
@@ -182,11 +190,14 @@ static void resume_game(void)
  * WIN state entry (flat from main, never nested in the game update). */
 static void win_now(void)
 {
+    uint8_t lid;
+
     completed[level] = 1;
     ui_cursor_hide();
     preview_forget();
-    win_level = level;
-    win_last = (uint8_t)((level + 1 < LEVEL_COUNT) ? 0 : 1);
+    lid = level_in_diff();
+    win_level = lid;
+    win_last = (uint8_t)((lid < DIFF_LEVELS - 1) ? 0 : 1);
     need_win_draw = 1;
     state = ST_WIN;
 }
@@ -270,7 +281,31 @@ static void erase_cell(void)
     }
 }
 
-/* Level-select handler: Up/Down = row, Left/Right = page, A = play. */
+/* Difficulty handler: Up/Down = mode, A = choose. */
+static void diff_update(void)
+{
+    uint8_t next;
+
+    if (input_pressed(J_UP)) {
+        next = wrap_add(sel_diff, -1, DIFF_COUNT);
+        ui_diff_cursor(sel_diff, next);
+        sel_diff = next;
+    }
+    if (input_pressed(J_DOWN)) {
+        next = wrap_add(sel_diff, 1, DIFF_COUNT);
+        ui_diff_cursor(sel_diff, next);
+        sel_diff = next;
+    }
+    if (input_pressed(J_A) || input_pressed(J_START)) {
+        sel_page = 0;
+        sel_row = 0;
+        ui_select(sel_page, sel_row, &completed[(uint16_t)sel_diff * DIFF_LEVELS], sel_diff);
+        state = ST_SELECT;
+    }
+}
+
+/* Level-select handler: Up/Down = row, Left/Right = page, A = play,
+ * B = back to difficulty. */
 static void select_update(void)
 {
     uint8_t next;
@@ -287,14 +322,19 @@ static void select_update(void)
     }
     if (input_pressed(J_LEFT)) {
         sel_page = wrap_add(sel_page, -1, SELECT_PAGE_COUNT);
-        ui_select_page(sel_page, sel_row, completed);
+        ui_select_page(sel_page, sel_row, &completed[(uint16_t)sel_diff * DIFF_LEVELS]);
     }
     if (input_pressed(J_RIGHT)) {
         sel_page = wrap_add(sel_page, 1, SELECT_PAGE_COUNT);
-        ui_select_page(sel_page, sel_row, completed);
+        ui_select_page(sel_page, sel_row, &completed[(uint16_t)sel_diff * DIFF_LEVELS]);
+    }
+    if (input_pressed(J_B)) {
+        ui_diff(sel_diff);
+        state = ST_DIFF;
+        return;
     }
     if (input_pressed(J_A) || input_pressed(J_START)) {
-        start_level((uint8_t)(sel_page * LEVELS_PER_PAGE + sel_row));
+        start_level((uint16_t)((uint16_t)sel_diff * DIFF_LEVELS + sel_page * LEVELS_PER_PAGE + sel_row));
     }
 }
 
@@ -306,7 +346,7 @@ static void game_update(void)
         preview_erase();
         flash = 0;
         menu_choice = 0;
-        ui_pause(menu_choice, level);
+        ui_pause(menu_choice, level_in_diff(), sel_diff);
         state = ST_PAUSE;
         return;
     }
@@ -367,7 +407,7 @@ static void do_hint(void)
         cursor_row = (uint8_t)(idx / GRID_SIZE);
         cursor_col = (uint8_t)(idx % GRID_SIZE);
     }
-    value = (uint8_t)(puzzles[level].solution[idx] - '0');
+    value = puzzle_solution(level, idx);
     board_set(idx, value);
     board_reveal(idx);
     if (board_is_solved()) {
@@ -404,7 +444,7 @@ static void pause_update(void)
         } else if (menu_choice == MENU_RESTART) {
             start_level(level);
         } else {
-            ui_select(sel_page, sel_row, completed);
+            ui_select(sel_page, sel_row, &completed[(uint16_t)sel_diff * DIFF_LEVELS], sel_diff);
             state = ST_SELECT;
         }
     }
@@ -414,10 +454,10 @@ static void pause_update(void)
 static void win_update(void)
 {
     if (input_pressed(J_A) || input_pressed(J_START)) {
-        if (level + 1 < LEVEL_COUNT) {
-            start_level((uint8_t)(level + 1));
+        if (!win_last) {
+            start_level((uint16_t)(level + 1));
         } else {
-            ui_select(sel_page, sel_row, completed);
+            ui_select(sel_page, sel_row, &completed[(uint16_t)sel_diff * DIFF_LEVELS], sel_diff);
             state = ST_SELECT;
         }
     }
@@ -434,16 +474,20 @@ void main(void)
     }
     ui_init();
     input_poll_init();
+    sel_diff = 0;
     sel_page = 0;
     sel_row = 0;
     menu_choice = 0;
     preview_forget();
-    ui_select(sel_page, sel_row, completed);
-    state = ST_SELECT;
+    ui_diff(sel_diff);
+    state = ST_DIFF;
 
     while (1) {
         input_poll();
         switch (state) {
+        case ST_DIFF:
+            diff_update();
+            break;
         case ST_SELECT:
             select_update();
             break;

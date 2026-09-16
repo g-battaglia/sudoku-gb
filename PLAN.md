@@ -26,7 +26,8 @@ A complete, playable Sudoku game for real DMG hardware and emulators
 - No game over: mistakes are only tallied, play goes on forever.
 - HINT (START menu) reveals a cell digit, renders it gray like a player
   digit, and locks it.
-- Boot screen: `SELECT LEVEL` (100 levels, 10 per page, `*` = beaten).
+- Boot screen: `SELECT MODE` (EASY / MEDIUM / HARD), then 100 levels
+  per mode, 10 per page, `*` = beaten.
 - Custom precomputed tiles for the board (no external graphic assets).
 - LCD-safe on real hardware: the LCD stops exactly once (boot init via
   GBDK display_off). Every screen is drawn into the hidden BG map, then
@@ -70,7 +71,7 @@ Valid ROM header from `lcc`/`makebin` (Nintendo logo, checksums).
 PLAN.md                  <- this file
 Makefile                 <- GBDK build (+ setup-gbdk, test-emulator)
 src/
-  types.h                [DONE] constants (9x9, 100 levels, screen)
+  types.h                [DONE] constants (9x9, screen 20x18)
   puzzles.h / puzzles.c  [DONE] Puzzle type + difficulty_name()
   puzzles_gen.c          [GENERATED] 100 puzzles + solutions (gen_puzzles.py)
   board.h / board.c      [DONE] state + rules (origins, hint locks)
@@ -105,10 +106,9 @@ so they compile and run on PC with `gcc` (`make test-host`).
 
 ```c
 typedef struct {
-    Difficulty difficulty;         // EASY / MEDIUM / HARD
-    char givens[CELL_COUNT + 1];   // 81 chars '0'-'9' + '\0', '0' = empty
-    char solution[CELL_COUNT + 1]; // unique full grid (powers HINT)
-} Puzzle;
+    uint8_t solution[41];    // 81 digits 1-9, 4 bits each (nibbles)
+    uint8_t givens_mask[11]; // bit i = cell i is a given
+} Puzzle;  // 52 bytes/level, difficulty = index range
 ```
 
 Givens + solution in ROM (81 bytes/level extra, ~12KB total code+data
@@ -123,7 +123,7 @@ Generated file: NEVER edit by hand.
 
 ### 3.4 Passwords — REMOVED
 
-The password system was deleted (git history has it): 100 levels are
+The password system was deleted (git history has it): all levels are
 freely selectable, progress marks are session-only.
 ## 4. Rendering: fullscreen tile grid + 4-sprite cursor (no assets)
 
@@ -142,7 +142,8 @@ Feedback without text: picked digit blinks in the cell (tiles only,
 board untouched); rejected digit hides the cursor ~24 frames; locked
 cells blink the cursor. `ui_cell(r,c)` redraws one 2x2 cell,
 `ui_preview(r,c,v,show)` draws/erases the blink, `ui_cursor(r,c)` moves.
-ui_* screens: select (100 levels + `*` marks), START menu (status +
+ui_* screens: difficulty select (EASY/MEDIUM/HARD), select (100 levels
+per mode + `*` marks), START menu (status +
 RESUME/HINT/RESTART/TITLE + help), win (tally or completion).
 Screens are double-buffered (hidden map + one atomic LCDC swap, tile
 patterns resident); text is font tiles, never stdio.
@@ -151,7 +152,8 @@ patterns resident); text is font tiles, never stdio.
 
 | Context | Input | Action |
 |---|---|---|
-| Select | Up/Down + Left/Right + A | Play any of the 100 levels (`*` = beaten) |
+| Diff | Up/Down + A | Choose EASY / MEDIUM / HARD (100 levels each) |
+| Select | Up/Down + Left/Right + A, B | Play any level of the mode (`*` = beaten); B back to the mode |
 | Game | D-Pad | Cursor (wraps at edges, auto-repeat) |
 | Game | A on cell | Digit-pick mode (locked cells blink) |
 | Pick | Up/Down | Pick digit 1-9 (blinks in the cell) |
@@ -186,7 +188,8 @@ on every level entry; win = `board_is_solved()` after each confirmed A
 
 - `ui_init()` — LCD off once, resident tiles, parked sprites (LCD stays
   off until the first screen presents it).
-- `ui_select(page, row, done)` (100 levels, 10/page, `*`),
+- `ui_diff(choice)` (EASY/MEDIUM/HARD), `ui_select(page, row, done,
+  diff)` (100 levels of one mode, 10/page, `*`),
   `ui_game_full(row, col)` (grid + placed cursor, no text),
   `ui_cell(r,c)` (one 2x2 cell), `ui_preview(r,c,v,show)` (blink without
   touching the board), `ui_cursor(r,c)` (4-sprite outline),

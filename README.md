@@ -1,7 +1,8 @@
 # Sudoku GB
 
-Sudoku for Game Boy Classic (DMG). 100 levels, hints, no save,
-no audio, no game over (infinite play, mistakes only tallied).
+Sudoku for Game Boy Classic (DMG). 300 levels (100 EASY + 100 MEDIUM
++ 100 HARD, selected at boot), hints, no save, no audio, no game over
+(infinite play, mistakes only tallied).
 Toolchain: GBDK-2020 4.5.0 (vendored in `tools/gbdk/`, gitignored;
 run `make setup-gbdk` once on a fresh clone). Everything in English.
 
@@ -21,15 +22,17 @@ make run          # open in mGBA
 make check        # header + size checks
 make test-host    # PC logic tests (gcc)
 make test-emulator # headless smoke test (needs: pip install pyboy pillow)
-make regen-puzzles # regenerate puzzles (seed 20260916, deterministic)
+make regen-puzzles # regenerate puzzles (seed 20260916, ~2 min)
 make regen-tiles   # regenerate grid tiles (deterministic)
 make clean
 ```
 
 ## Controls
 
+- Boot: `SELECT MODE` (EASY / MEDIUM / HARD, 100 levels each).
 - Select screen: Up/Down choose a row, Left/Right change page
-  (10 pages of 10 levels), A plays. `*` = beaten this session.
+  (10 pages of 10 levels), A plays, B goes back to the mode.
+  `*` = beaten this session; `DONE x/100` per mode.
 - D-Pad: move cursor (wraps at edges, auto-repeat when held)
 - A on a cell: digit-pick mode (picked digit blinks in the cell)
   - Up/Down: pick digit 1-9, A: confirm, B: back (no change)
@@ -39,9 +42,10 @@ make clean
 
 ## Rules
 
-- 100 free levels from boot: 10 introductory EASY (48 givens),
-  then 24 EASY (42) + 33 MEDIUM (34) + 33 HARD (29).
-- Every puzzle has a unique solution (generator-verified).
+- 300 free levels from boot: 100 EASY + 100 MEDIUM + 100 HARD
+  (EASY starts with 10 introductory puzzles at 48 givens).
+- Every puzzle has a unique solution (generator-verified) and is
+  packed in ROM as 52 bytes (solution nibbles + givens mask).
 - No game over: play forever, mistakes are only counted (START menu).
 - HINT reveals the true digit of a cell and locks it (free, unlimited).
   Hinted cells render gray like player digits but stay locked.

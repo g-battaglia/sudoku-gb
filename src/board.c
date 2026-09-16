@@ -26,15 +26,14 @@ static uint8_t cell_index(uint8_t row, uint8_t col)
 }
 
 /* Load level `level` (0-based): reset grid, origins and mistakes. */
-void board_load(uint8_t level)
+void board_load(uint16_t level)
 {
-    uint8_t i;
-    const char *givens;
+    uint8_t i, g;
 
-    givens = puzzles[level].givens;
     for (i = 0; i < CELL_COUNT; i++) {
-        cells[i] = (uint8_t)(givens[i] - '0');
-        origin[i] = (givens[i] != '0') ? ORIGIN_GIVEN : ORIGIN_PLAYER;
+        g = puzzle_given(level, i);
+        cells[i] = g;
+        origin[i] = (g != 0) ? ORIGIN_GIVEN : ORIGIN_PLAYER;
     }
     error_count = 0;
 }

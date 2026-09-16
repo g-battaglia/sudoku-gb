@@ -1,9 +1,10 @@
 # COMPACT.md — Sudoku GB: state of work and next steps
 
-> Snapshot for resuming work. 100 levels, no passwords, precomputed
-> tiles, double-buffered atomic screens. Build is green AND
-> headless-verified with PyBoy (`make test-emulator`: 90+ checks pass,
-> every transition frame-checked). All text/code in English.
+> Snapshot for resuming work. 300 levels (100 EASY + 100 MEDIUM + 100
+> HARD, selected at boot), packed in ROM, double-buffered atomic
+> screens. Build is green AND headless-verified with PyBoy
+> (`make test-emulator`: 128 checks pass, every transition
+> frame-checked). All text/code in English.
 
 ---
 
@@ -19,9 +20,10 @@ player digits). Dynamics: D-Pad moves the cursor (solid 2px ring),
 **A = digit-pick mode** (Up/Down pick blinking digit, A confirm,
 B back), B erases, START menu has centered status + RESUME / HINT /
 RESTART / TITLE + 3-line help. **No game over** (mistakes tallied
-only). Boot = **free level select** (100 levels, 10 pages of 10,
-`*` = beaten this session). Original clues are black; player digits and
-HINT reveals are dark gray (hints stay locked).
+only). Boot = **mode select** (EASY / MEDIUM / HARD) then **free level
+select** (100 levels of that mode, 10 pages of 10, `*` = beaten this
+session, `B` returns to the mode). Original clues are black; player
+digits and HINT reveals are dark gray (hints stay locked).
 
 ---
 
@@ -60,9 +62,10 @@ PLAN.md        full plan
 Makefile       GBDK build + setup-gbdk + test-emulator
 
 src/
-  types.h        constants: 9x9, 100 levels, screen 20x18
-  puzzles.h      Puzzle { Difficulty, givens[82], solution[82] } + table
-  puzzles_gen.c  GENERATED: 100 givens + solutions (do not edit)
+  types.h        constants: 9x9, screen 20x18
+  puzzles.h      Puzzle { solution[41], givens_mask[11] } (52B, packed)
+                 + puzzle_solution/given + difficulty_name; 300 levels
+  puzzles_gen.c  GENERATED: 300 packed levels (do not edit)
   puzzles.c      difficulty_name()
   board.h/.c     cells[81] + origin[81] + mistakes (tally only)
   input.h/.c     joypad edge detection + D-Pad auto-repeat
@@ -131,18 +134,24 @@ Clean-code invariants (keep them):
 - `board_is_original()` = GIVEN; `board_is_locked()` = not PLAYER.
 - Erase only clears unlocked player digits.
 
-### 4.5 Levels, select, hint, win
+### 4.5 Levels, modes, select, hint, win
 
-- 100 levels: 10 intro EASY (48 givens) + 24 EASY (42) + 33 MEDIUM (34)
-  + 33 HARD (29). Unique solutions, generator-verified (cap-2 solver),
-  seed 20260916. Host tests assert solution validity + intro givens.
-- Select: 10 pages x 10 (`SELECT_PAGE_COUNT`), Up/Down row, Left/Right
-  page, A play. `completed[100]` session-only.
+- 300 levels = 100 EASY + 100 MEDIUM + 100 HARD (EASY starts with 10
+  intro puzzles at 48 givens). Unique solutions, generator-verified
+  (cap-2 solver), seed 20260916. Packed 52 bytes/level: solution
+  nibbles (41) + givens mask (11) = 15.6KB total; the old char format
+  (165B/level) could never fit 300 levels in 32KB.
+- Difficulty = index range (level/100); host tests assert solution
+  validity + intro givens.
+- Select: mode screen first (Up/Down + A), then 10 pages x 10 of that
+  mode (Up/Down row, Left/Right page, A play, B back to mode).
+  `completed[300]` session-only; `DONE x/100` counts the current mode.
 - HINT: cursor cell if empty+editable else first such cell; writes the
-  solution digit, locks it, redraws; skips the grid redraw on a win.
-- Win = full grid (unique puzzles + rejected conflicts ⇒ full is valid).
-  Win screen is drawn on ST_WIN entry (deferred `need_win_draw`), shows
-  `LEVEL NNN CLEAR!` + mistakes (or completion), A continues.
+  solution digit (puzzle_solution), locks it, redraws; skips the grid
+  redraw on a win.
+- Win = full grid (unique puzzles + rejected conflicts ⇒ full is
+  valid). Shows the level number WITHIN the mode (`LEVEL 001/100`);
+  `is_last` = mode completed; A continues to the next level.
 
 ---
 

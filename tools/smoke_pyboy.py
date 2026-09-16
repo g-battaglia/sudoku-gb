@@ -177,12 +177,37 @@ offs = [i for i, v in enumerate(lcd_trace) if not v & 0x80]
 check("boot LCD init window", len(offs) >= 5)
 check("boot LCD never re-clears",
       bool(offs) and all(v & 0x80 for v in lcd_trace[offs[-1] + 1:]))
-check("boot select text", map_kind(vis_map()) == "text")
+check("boot diff screen text", map_kind(vis_map()) == "text")
 check("boot LCD on", lcd_on())
 check("boot LCDC menu mode", lcd() & 0x12 == 0x00)
 check("boot OAM parked", cursor_parked(oam()))
 check("font resident at 0x9000", vram_sum(0x9000, 96 * 16) > 1000)
 check("grid resident at 0x8000", vram_sum(0x8000, 230 * 16) > 1000)
+
+# 1b. Difficulty screen: marker moves without blanking or LCDC flip.
+lcd0 = lcd()
+blank = False
+hold("down", 4)
+for _ in range(10):
+    p.tick(2)
+    if map_kind(vis_map()) != "text":
+        blank = True
+hold("up", 4)
+for _ in range(10):
+    p.tick(2)
+    if map_kind(vis_map()) != "text":
+        blank = True
+check("diff nav never blanks", not blank)
+check("diff nav keeps LCDC", lcd() == lcd0)
+p.screen.image.save("/tmp/smoke_diff.png")
+check("diff pixels drawn", has_ink("/tmp/smoke_diff.png"))
+
+# 1c. A -> select of that difficulty (still a menu swap, parked OAM).
+hold("down", 4)  # MEDIUM
+idle(8)
+swap(lambda: hold("a", 4), "text", "parked", "menu")
+check("select title is MEDIUM", vis_map()[1 * 32:1 * 32 + 20] !=
+      b"\x00" * 20)
 
 # 2. Select arrows: same LCDC value throughout (no map flip, no reload).
 lcd0 = lcd()
@@ -207,6 +232,10 @@ check("select nav keeps LCDC", lcd() == lcd0)
 check("page 2 text intact", map_kind(vis_map()) == "text")
 p.screen.image.save("/tmp/smoke_select.png")
 check("select pixels drawn", has_ink("/tmp/smoke_select.png"))
+
+# 2b. B returns to the difficulty screen.
+swap(lambda: hold("b", 4), "text", "parked", "menu")
+swap(lambda: hold("a", 4), "text", "parked", "menu")  # re-enter MEDIUM
 
 # 3. A -> game: atomic swap to grid + cursor + game mode.
 ok = swap(lambda: hold("a", 4), "grid", "cursor", "game")
@@ -281,7 +310,7 @@ check("hint pixels drawn", has_ink("/tmp/smoke_hint.png"))
 # 8. Repeated hints -> readable win screen, A advances.
 # Every leg is frame-checked: LCD on, old-or-new only, coherent OAM.
 won = False
-for _ in range(45):
+for _ in range(85):
     before = vis_map()
     hold("start", 4)
     got_pause = False

@@ -18,7 +18,8 @@
 #define BOX_SIZE 3     /* 3x3 boxes. */
 
 /* --- Levels ----------------------------------------------------------------- */
-#define LEVEL_COUNT 100 /* 10 intro + 24 EASY + 33 MEDIUM + 33 HARD. */
+/* LEVEL_COUNT lives in puzzles.h: it depends on DIFF_COUNT/DIFF_LEVELS
+ * (3 difficulties x 100 levels each). */
 
 /* --- Screen ----------------------------------------------------------------- */
 #define SCREEN_COLS 20 /* GBDK font is 8x8: 160/8 = 20 columns. */
