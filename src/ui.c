@@ -210,8 +210,9 @@ static void draw_centered(uint8_t y, const char *s)
 }
 
 /* Draw one select row as a fixed 4-wide centered block (cols 8-11):
- * number + status char ('>' selected, '*' done, '-' else). Every row
- * shows the same width, so every row is perfectly symmetric. */
+ * number + status char ('<' selected, pointing at the number, '*'
+ * done, '-' else). Every row shows the same width, so every row is
+ * perfectly symmetric. */
 static void select_draw_row(uint8_t page, uint8_t i, uint8_t row,
                             const uint8_t *done)
 {
@@ -222,7 +223,7 @@ static void select_draw_row(uint8_t page, uint8_t i, uint8_t row,
     text_tiles[1] = (uint8_t)('0' + (uint8_t)(((n + 1) / 10) % 10) - 32);
     text_tiles[2] = (uint8_t)('0' + (uint8_t)((n + 1) % 10) - 32);
     if (i == row) {
-        text_tiles[3] = (uint8_t)('>' - 32);
+        text_tiles[3] = (uint8_t)('<' - 32);
     } else {
         text_tiles[3] = (uint8_t)((done[n] ? '*' : '-') - 32);
     }
@@ -477,14 +478,14 @@ void ui_select(uint8_t page, uint8_t row, const uint8_t *done, uint8_t diff)
     screen_present(LCDC_MENU);
 }
 
-/* Level-select navigation: move the `>` status char between rows
+/* Level-select navigation: move the `<' status char between rows
  * (redraws the old row's real status), LCD stays on. */
 void ui_select_cursor(uint8_t page, uint8_t old_row, uint8_t new_row,
                        const uint8_t *done)
 {
     map_tile(11, (uint8_t)(3 + old_row),
              select_status((uint8_t)(page * LEVELS_PER_PAGE + old_row), done));
-    map_tile(11, (uint8_t)(3 + new_row), (uint8_t)('>' - 32));
+    map_tile(11, (uint8_t)(3 + new_row), (uint8_t)('<' - 32));
 }
 
 /* Select page change: page line + rows only (LCD stays on, no reload). */
