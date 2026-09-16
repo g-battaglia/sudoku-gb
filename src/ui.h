@@ -63,17 +63,18 @@ void ui_select(uint8_t page, uint8_t row, const uint8_t *done,
                uint8_t diff);
 
 /* Select navigation (call after ui_select, LCD stays on, no reload):
- * move the `>` marker, or redraw the page rows on page change. */
-void ui_select_cursor(uint8_t old_row, uint8_t new_row);
+ * move the `>` status char, or redraw the page rows on page change. */
+void ui_select_cursor(uint8_t page, uint8_t old_row, uint8_t new_row,
+                       const uint8_t *done);
 void ui_select_page(uint8_t page, uint8_t row, const uint8_t *done);
 
 /* Game screen: fullscreen grid + margins, cursor placed by us (no caller
  * can show a game frame before its OAM is ready). No text at all. */
 void ui_game_full(uint8_t row, uint8_t col);
 
-/* START menu. `choice` 0 = RESUME, 1 = HINT, 2 = RESTART, 3 = TITLE.
- * Shows level (number within the difficulty), mistake count and empty
- * cells left. */
+/* START menu. `choice` 0 = RESUME, 1 = HINT, 2 = PLAY AGAIN, 3 = MENU.
+ * Shows the level (number within the difficulty), difficulty and
+ * mistake count. */
 void ui_pause(uint8_t choice, uint8_t lid, uint8_t diff);
 
 /* Pause navigation (call after ui_pause, LCD stays on, no reload). */

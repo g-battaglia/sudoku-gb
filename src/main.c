@@ -39,7 +39,7 @@ typedef enum {
 #define MENU_RESUME 0
 #define MENU_HINT 1
 #define MENU_RESTART 2
-#define MENU_TITLE 3
+#define MENU_MENU 3
 #define MENU_COUNT 4
 
 /* Current state. */
@@ -312,12 +312,14 @@ static void select_update(void)
 
     if (input_pressed(J_UP)) {
         next = wrap_add(sel_row, -1, LEVELS_PER_PAGE);
-        ui_select_cursor(sel_row, next);
+        ui_select_cursor(sel_page, sel_row, next,
+                         &completed[(uint16_t)sel_diff * DIFF_LEVELS]);
         sel_row = next;
     }
     if (input_pressed(J_DOWN)) {
         next = wrap_add(sel_row, 1, LEVELS_PER_PAGE);
-        ui_select_cursor(sel_row, next);
+        ui_select_cursor(sel_page, sel_row, next,
+                         &completed[(uint16_t)sel_diff * DIFF_LEVELS]);
         sel_row = next;
     }
     if (input_pressed(J_LEFT)) {
@@ -444,8 +446,8 @@ static void pause_update(void)
         } else if (menu_choice == MENU_RESTART) {
             start_level(level);
         } else {
-            ui_select(sel_page, sel_row, &completed[(uint16_t)sel_diff * DIFF_LEVELS], sel_diff);
-            state = ST_SELECT;
+            ui_diff(sel_diff);
+            state = ST_DIFF;
         }
     }
 }
