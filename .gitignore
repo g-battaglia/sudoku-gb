@@ -1,0 +1,11 @@
+# Build output
+build/
+# GBDK tarball (toolchain is vendored extracted)
+/tools/gbdk.tar.gz
+tools/gbdk.tar.gz
+# Stray link outputs at root
+*.ihx
+*.gb
+# Temp
+/tmp/
+.DS_Store
