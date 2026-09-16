@@ -1,35 +1,24 @@
 #ifndef TILES_H
 #define TILES_H
 
-/* Tile layout summary (full docs in tiles.c):
- * BG tiles 96-176 = grid digits/empty x4 border variants + frame tiles
- * (font uses 0-95); sprite tile 240 = cursor outline. Thick 2px border
- * every 3rd row/col, thin 1px elsewhere. Only constants + API live here. */
+/* Tile summary: each cell is 16x16 px = 2x2 BG tiles. 10 contents
+ * (empty + digits 1-9, all black) x 4 border variants per quadrant:
+ * TL tiles 96-135, TR 136-175, BL 176-215, BR 216-255 (all free VRAM).
+ * Borders: 2px outer frame + 2px box gaps, 1px thin cell lines.
+ * Cursor = 4 sprites (8x8 corner tiles 240-243). Full docs: tiles.c. */
 
 #include "types.h"
 
-/* VRAM index of the first grid tile (must follow the loaded font). */
-#define GRID_TILE_BASE 96
-
-/* Corner tile of the outer frame (top-left of the grid). */
-#define FRAME_CORNER_TILE 176
-
-/* Sprite slot and VRAM tile used for the cursor outline. */
+/* First sprite id and first sprite VRAM tile of the 16x16 cursor
+ * (uses 4 consecutive sprite ids and 4 consecutive sprite tiles). */
 #define CURSOR_SPRITE_ID 0
 #define CURSOR_SPRITE_TILE 240
 
-/* Generate all grid/frame/sprite tiles and load them into VRAM. */
+/* Generate all grid + cursor tiles and load them into VRAM. */
 void tiles_load(void);
 
-/* Tile index for a cell value (0 = empty, 1-9 = digit).
- * `is_user` picks the gray player shade (ignored when value is 0).
- * `row`/`col` select the border variant (thick every 3rd line). */
-uint8_t grid_tile(uint8_t value, uint8_t is_user, uint8_t row, uint8_t col);
-
-/* Frame tile above grid column `col` (thick where a box gap is). */
-uint8_t frame_tile_top(uint8_t col);
-
-/* Frame tile left of grid row `row` (thick where a box gap is). */
-uint8_t frame_tile_left(uint8_t row);
+/* Fill `out[4]` with the TL/TR/BL/BR tile indices for a cell value
+ * (0 = empty, 1-9 = digit) at grid (row, col), borders included. */
+void grid_cell_tiles(uint8_t value, uint8_t row, uint8_t col, uint8_t *out);
 
 #endif /* TILES_H */

@@ -5,9 +5,10 @@
  * puzzles.h — Level definitions.
  *
  * Each level is a string of 81 characters ('0' = empty cell,
- * '1'-'9' = fixed digit). We store ONLY the givens, not the solution:
- * every puzzle has a unique solution (guaranteed by tools/gen_puzzles.py),
- * so "full and valid grid" is equivalent to "solved level".
+ * '1'-'9' = fixed digit). Givens are the start position; the solution
+ * is the unique full grid (guaranteed by tools/gen_puzzles.py) and
+ * powers the HINT command. Win still means "full and valid grid",
+ * which equals the stored solution.
  *
  * The actual data lives in src/puzzles_gen.c (generated file, do not edit).
  * This module has no hardware dependencies: it is testable on PC with gcc.
@@ -22,10 +23,12 @@ typedef enum {
     DIFF_HARD = 2
 } Difficulty;
 
-/* A playable level. */
+/* A playable level. Givens are the starting cells; the solution is the
+ * unique full grid (powers the HINT command, 81 bytes per level). */
 typedef struct {
-    Difficulty difficulty;       /* Level difficulty. */
-    char givens[CELL_COUNT + 1]; /* 81 chars + terminator. */
+    Difficulty difficulty;         /* Level difficulty. */
+    char givens[CELL_COUNT + 1];   /* 81 chars + terminator. */
+    char solution[CELL_COUNT + 1]; /* 81 chars + terminator. */
 } Puzzle;
 
 /* Level table (in ROM). Defined in puzzles_gen.c. */

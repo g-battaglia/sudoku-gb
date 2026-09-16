@@ -4,7 +4,7 @@
 > Toolchain: **GBDK-2020 4.5.0 + SDCC 4.6.0** (vendored in `tools/gbdk/`).
 > Principles: **clean code, YAGNI, explicit and well-commented code.**
 > User constraints: **single shot (no milestones), no save system,
-> no audio (for now), level unlock via passwords.**
+> no audio (for now), free level select, passwords only as proof.**
 > Language: **everything in English (docs, code, comments, UI strings).**
 
 ---
@@ -14,18 +14,20 @@
 A complete, playable Sudoku game for real DMG hardware and emulators
 (primary: mGBA):
 
-- 12 sequential levels: 4 EASY + 4 MEDIUM + 4 HARD.
-- 9x9 grid, D-Pad navigation, digit entry 1-9, erase.
-- 3 mistakes = game over. Full and valid grid = win.
+- 12 free levels: 4 EASY + 4 MEDIUM + 4 HARD, all playable from boot.
+- 9x9 fullscreen grid, D-Pad navigation, A = digit-pick mode, erase.
+- No game over: mistakes are only tallied, play goes on forever.
+- HINT (START menu) reveals a cell digit and locks it.
 - Beating level N shows the **4-digit password** for level N+1.
-- Title screen: `NEW GAME` (from level 0) or `PASSWORD`
-  (jump straight to a level with a code).
+- Boot screen: `SELECT LEVEL` (all 12 free, `*` = beaten this session).
+- A password never unlocks: it only marks levels 1..N-1 `*` and jumps
+  to level N (restores the progress display, no save exists).
 - Custom procedural tiles for the board (no external graphic assets).
 
 Explicitly OUT of scope (YAGNI):
 
 - Cartridge save (no MBC/SRAM/battery: ROM ONLY 32KB).
-- Audio/SFX/music. Pencil marks, hints, timer, on-device generator.
+- Audio/SFX/music. Pencil marks, timer, on-device generator.
 - SGB/CGB support (the game runs in DMG mode, also on CGB).
 
 ---
@@ -58,16 +60,17 @@ Valid ROM header from `lcc`/`makebin` (Nintendo logo, checksums).
 
 ```text
 PLAN.md                  <- this file
-Makefile                 <- GBDK build (TODO, see section 7)
+Makefile                 <- GBDK build
 src/
-  types.h                [DONE] constants (9x9, 12 levels, max mistakes)
+  types.h                [DONE] constants (9x9, 12 levels, screen)
   puzzles.h / puzzles.c  [DONE] Puzzle type + difficulty_name()
-  puzzles_gen.c          [GENERATED] 12 puzzles (tools/gen_puzzles.py)
+  puzzles_gen.c          [GENERATED] 12 puzzles + solutions (gen_puzzles.py)
   passwords.h/.c         [DONE] password formula, match, find
-  board.h / board.c      [DONE] state + rules
-  input.h / input.c      [TODO] joypad debounce (pressed + repeat)
-  ui.h / ui.c            [TODO] text rendering + screens
-  main.c                 [TODO] state loop + game flow
+  board.h / board.c      [DONE] state + rules (no game over, hint locks)
+  input.h / input.c      [DONE] joypad debounce (pressed + repeat)
+  tiles.h / tiles.c      [DONE] fullscreen 16x16 grid + cursor tiles
+  ui.h / ui.c            [DONE] grid screens + text menus
+  main.c                 [DONE] state loop + edit-mode flow
 tools/
   gbdk/                  [DONE] vendored toolchain (gbdk.tar.gz gitignored)
   gen_puzzles.py         [DONE] generator, 12 unique verified puzzles
@@ -81,7 +84,7 @@ build/                   .gb/.ihx/.map output (gitignored)
 | `types.h` | Global `#define` only. | No |
 | `puzzles` | Level data + difficulty names. | No (ROM) |
 | `passwords` | `password_for_level/matches/find_level`. uint32 math only. | No |
-| `board` | `cells[81]`, load/get/set/conflicts/is_solved/errors. 3-mistake rule here. | No |
+| `board` | `cells[81]`, `locked[81]`, load/get/set/conflicts/is_solved/errors/reveal. No game over: mistakes tallied only. | No |
 | `input` | Reads `joypad()`, exposes edge `pressed` + D-Pad auto-repeat. | Yes (GBDK) |
 | `ui` | All drawing: font_init, cls, gotoxy/printf, grid, screens. | Yes (GBDK) |
 | `main` | State machine + flow, no direct drawing (calls ui_*). | Via ui/input |
@@ -93,13 +96,16 @@ so they compile and run on PC with `gcc` (`make test-host`).
 
 ```c
 typedef struct {
-    Difficulty difficulty;        // EASY / MEDIUM / HARD
-    char givens[CELL_COUNT + 1];  // 81 chars '0'-'9' + '\0', '0' = empty
+    Difficulty difficulty;         // EASY / MEDIUM / HARD
+    char givens[CELL_COUNT + 1];   // 81 chars '0'-'9' + '\0', '0' = empty
+    char solution[CELL_COUNT + 1]; // unique full grid (powers HINT)
 } Puzzle;
 ```
 
-Givens only in ROM, solution NOT stored (saves ROM + YAGNI):
-every puzzle has a unique solution (generator-guaranteed) and `board.c`
+Givens + solution in ROM (81 bytes/level extra, ~12KB total code+data
+in a 32KB ROM: plenty of slack). Win still means "full and valid",
+which equals the stored solution. Uniqueness is generator-guaranteed
+and `board.c`
 rejects any conflicting digit, so "full" implies "valid".
 `tools/gen_puzzles.py --seed=20260916`: random full grid + digging with
 a backtracking+MRV solver that checks uniqueness (cap 2) after each dig.
@@ -114,60 +120,58 @@ code = ((((level + 1) * 7919 + 104729) ^ 0xBEEF) % 10000)  // 0..9999
 
 `level` is 0-based (0..11). Explicit `uint32_t`: identical on SDCC/gcc.
 `password_matches(l, code)`, `password_find_level(code)` (-1 if invalid).
+A password for level N (0-based `found`) proves levels 1..N-1 beaten:
+the game marks them `*` and jumps to level N. It unlocks nothing —
+every level is always playable; the marks are session-only.
 Single source of truth = `password_for_level()` in C; the printable
 table comes from `make passwords` (host test printing the codes).
 Honest NOTE in comments: not security, just anti-spoiler (formula is in ROM).
-## 4. Rendering: tile grid + sprite cursor (custom tiles, no assets)
+## 4. Rendering: fullscreen tile grid + 4-sprite cursor (no assets)
 
-Text (menus, header, footer) uses the GBDK built-in font. The board is
-a custom tile grid (`src/tiles.*`, procedural 8x8 tiles, no PNG/assets):
+The game screen is ONLY the board: 9x9 cells of 16x16 px (2x2 BG tiles)
+at tile (1, 0) = 144x144 px, full screen height, 1-tile margins. No
+header, footer or messages: level, mistakes, help live in START menu.
 
 ```text
-r0:  SUDOKU L01 EASY                   <- title + level + difficulty
-r1:  ERRORS X X .                      <- 3 mistake slots (X = used)
-r2:  (blank separator row)
-r3:  grid top frame (corner + top tiles)
-r4-12: 9 grid rows x 9 cells           <- 1 tile per cell, right+bottom
-     borders in-tile: 1px inside a 3x3 box, 2px between boxes/edges
-     (top/left borders come from neighbours or frame tiles)
-r13: ENTER: 5                           <- proposed digit (Up/Down, A confirms)
-r14-15: context help                    <- "UP/DN NUM A:OK" / "B:DEL START:MENU"
-r16: messages                           <- "MISTAKE!", "LOCKED CELL", ...
+fullscreen: 9x9 cells x 16px     <- chunky 2x digits (6x10), all black
+     borders baked per cell: 2px outer frame + 2px box gaps,
+     1px thin cell lines (each line drawn once, no wobble)
 ```
 
-Cursor = sprite 0 (8x8 outline, VRAM tile 240), moved with `move_sprite`;
-it overlays the cell so grid lines are never erased (no repaint needed).
-Given digits are black, player digits dark gray; `ui_cell(r,c)` redraws
-one cell, `ui_cursor(r,c)` just moves the sprite.
-ui_* screens: title (2 items), password entry (4 slots), pause
-(RESUME/RESTART/TITLE), win (password N+1 or "YOU WIN!"),
-game over (RETRY/TITLE). Grid via `set_bkg_tiles`, text via gotoxy/printf.
+Cursor = 4 sprites (8x8 corners, tiles 240-243) forming a 16x16 outline.
+Feedback without text: picked digit blinks in the cell (tiles only,
+board untouched); rejected digit hides the cursor ~24 frames; locked
+cells blink the cursor. `ui_cell(r,c)` redraws one 2x2 cell,
+`ui_preview(r,c,v,show)` draws/erases the blink, `ui_cursor(r,c)` moves.
+ui_* screens: select (12 levels + `*` marks), password entry (4 slots),
+START menu (status + RESUME/HINT/RESTART/TITLE + help), win (password
+N+1 or completion). Grid via `set_bkg_tiles`, menus via gotoxy/printf.
 
-## 5. Final controls (also shown in-game as help)
+## 5. Final controls (help is in the START menu)
 
 | Context | Input | Action |
 |---|---|---|
-| Title | Up/Down + A | NEW GAME (level 0) / PASSWORD |
+| Select | Up/Down + A | Play any of the 12 levels (`*` = beaten) |
+| Select | SELECT | Password entry (restores `*` marks, jumps) |
 | Game | D-Pad | Cursor (wraps at edges, auto-repeat) |
-| Game | Up/Down on editable | Proposed digit 1-9 (in ENTER row) |
-| Game | A | Confirm (conflict -> mistake+1, rejected) |
-| Game | B | Erase player digit (givens protected) |
-| Game | START | Pause |
+| Game | A on cell | Digit-pick mode (locked cells blink) |
+| Pick | Up/Down | Pick digit 1-9 (blinks in the cell) |
+| Pick | A / B | Confirm (conflict -> mistake, keep picking) / back |
+| Game | B | Erase player digit (locked cells blink) |
+| Game | START | Menu: RESUME / HINT / RESTART / TITLE |
 | Password | Up/Down+Left/Right, A/B | 4 digits, confirm / back |
-| Menus/Win/Lose | D-Pad + A (+B back) | Navigate, confirm, cancel |
-
-YAGNI: no separate number submenu, the digit cycles in place.
+| Menus/Win | D-Pad + A (+B back) | Navigate, confirm, cancel |
 
 ## 6. States (main.c)
 
 ```text
-ST_TITLE -> ST_PASSWORD_ENTRY -> ST_GAME <-> ST_PAUSE
-ST_GAME -> ST_WIN (shows pwd N+1) -> [A] next level, or title if last
-ST_GAME -> ST_GAMEOVER (3 mistakes) -> RETRY (reload) / TITLE
+ST_TITLE (select) -> ST_PASSWORD -> ST_GAME <-> ST_PAUSE
+ST_GAME -> ST_WIN (shows pwd N+1, marks `*`) -> [A] next level, or select if last
 ```
 
-`board_load(level)` on every level entry; win = `board_is_solved()`
-after each confirmed A; last level = completion screen.
+No game over, no retry screen: mistakes tallied forever. `board_load(level)`
+on every level entry; win = `board_is_solved()` after each confirmed A
+(or HINT); last level = completion screen back to select.
 ## 7. Remaining work (single shot)
 
 ### 7.1 `src/input.{h,c}` (~60 lines, simple)
@@ -180,29 +184,28 @@ after each confirmed A; last level = completion screen.
 - `uint8_t input_dir(uint8_t mask)` — repeat-aware, for cursor movement.
 - Why: no double-count while held; smooth held movement.
 
-### 7.2 `src/ui.{h,c}` + `src/tiles.{h,c}` [DONE] (tile grid + sprite cursor)
+### 7.2 `src/ui.{h,c}` + `src/tiles.{h,c}` [DONE] (fullscreen grid)
 
-- `ui_init()` — `font_init()`, `tiles_load()`, sprite tile, `DISPLAY_ON`.
-- `ui_draw_title(sel)`, `ui_draw_password(digits, pos, bad)`,
-  `ui_draw_board_frame()` (header + tile grid + footer, drawn once),
-  `ui_draw_cell(r,c)` (single cell tile: digit or empty, keeps borders),
-  `ui_draw_cursor(r,c)` (move sprite 0 outline),
-  `ui_draw_status()` (mistakes + level),
-  `ui_draw_entry(value)`, `ui_message(msg)` (row 16),
-  `ui_draw_pause(sel)`, `ui_draw_win(level, next_pwd, is_last)`,
-  `ui_draw_gameover(sel)`.
-- `tiles.c`: procedural 8x8 tiles (3x5 digits + thin/thick borders),
-  loaded with `set_bkg_data` (BG tiles 96-176, font uses 0-95).
+- `ui_init()` — `font_init()`, `tiles_load()`, 4 cursor sprites, `DISPLAY_ON`.
+- `ui_select(pos, done)` (12 free levels + `*`), `ui_password(digits,pos,bad)`,
+  `ui_game_full()` (grid only, no text), `ui_cell(r,c)` (one 2x2 cell),
+  `ui_preview(r,c,v,show)` (blink without touching the board),
+  `ui_cursor(r,c)` (4-sprite outline), `ui_pause(choice, level)`
+  (status + RESUME/HINT/RESTART/TITLE + help), `ui_win(...)`.
+- `tiles.c`: 16x16 cells (2x scaled digits, baked 1px/2px borders),
+  160 tiles at 96-255 (font keeps 0-95); cursor corners at 240-243.
 
-### 7.3 `src/main.c` [DONE] (states + flow)
+### 7.3 `src/main.c` [DONE] (states + edit-mode flow)
 
 - `void main(void)`: init, start at `ST_TITLE`,
   one `switch(state)` loop with `vsync()`.
-- Small handlers: `title_update()`, `password_update()`,
-  `game_update()`, `pause_update()`, `win_update()`,
-  `gameover_update()` — one main switch, no scattered machine.
-- State vars: `state, level, cursor_r/c, entry_value, pwd_digits[4]`.
-- Mistakes via `board_errors()/board_register_error()`.
+- Small handlers: `select_update()`, `password_update()`,
+  `game_update()` (navigation vs digit-pick mode), `pause_update()`
+  (RESUME/HINT/RESTART/TITLE), `win_update()` — one main switch.
+- State vars: `state, level, cursor_r/c, entry_value, editing, completed[12],
+  pwd_digits[4], frame, flash, preview tracker`.
+- Mistakes via `board_errors()/board_add_mistake()` (counted only).
+- HINT via `board_reveal()` + `puzzles[level].solution` (locks the cell).
 
 ### 7.4 `Makefile` (GBDK, ROM ONLY 32KB)
 
@@ -236,9 +239,10 @@ make clean
 ```
 
 Final check: boot in mGBA with no errors, header/Nintendo-logo OK,
-full playthrough of level 0 to win (password shown) + password
-entry for level 5, game over after 3 mistakes, cursor wrap,
-B on a given ignored, ROM <= 32768 bytes.
+level select (all 12 free, `*` after win), password restores `*`,
+edit-mode playthrough of level 0 to win (password shown), HINT locks,
+no game over after many mistakes, cursor wrap, fullscreen grid with
+clean 1px/2px lines, ROM <= 32768 bytes.
 
 ## 9. Risks
 
@@ -261,7 +265,7 @@ B on a given ignored, ROM <= 32768 bytes.
 4. [x] `ui.h/c` + `tiles.h/c` (tile grid screens + sprite cursor).
 5. [x] `main.c` (states + flow).
 6. [x] `Makefile` + `.gitignore` + `README.md` (commands + table + controls).
-7. [ ] Green `make test-host` + ROM <= 32KB + full `make run` playthrough.
-8. [ ] Final commit.
+7. [x] Green `make test-host` + ROM <= 32KB + tile PNG check.
+8. [ ] `make run` playthrough on a real emulator + final commit.
 
 No intermediate milestones by user choice: one final commit/validation.

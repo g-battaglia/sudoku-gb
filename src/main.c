@@ -10,15 +10,21 @@
 /* ---------------------------------------------------------------------------
  * main.c — Game flow. One state machine, one small handler per state.
  *
- * States: TITLE -> PASSWORD? -> GAME <-> PAUSE -> WIN / GAMEOVER.
+ * States: SELECT -> PASSWORD? -> GAME <-> PAUSE -> WIN.
  * Each frame: poll input once, run the current handler, wait for VBlank.
+ * No game over: mistakes are only tallied (START menu) and play goes on.
  *
- * Controls:
+ * Select screen: all 12 levels are freely playable from boot.
+ * A password never unlocks anything: it only marks the beaten levels
+ * (`*`) and jumps to the next one to play.
+ *
+ * Game controls:
  *   D-Pad .... move cursor (wraps at grid edges)
- *   Up/Down .. change proposed digit (on editable cells)
- *   A ........ confirm digit / menu OK
- *   B ........ erase player digit / back
- *   START .... pause menu
+ *   A ........ edit the cursor cell (digit-pick mode)
+ *     Up/Down  pick the digit (blinks in the cell)
+ *     A ...... confirm, B = back without changing
+ *   B ........ erase a player digit
+ *   START .... pause menu (RESUME / HINT / RESTART / TITLE)
  * -------------------------------------------------------------------------*/
 
 /* Game states. */
@@ -27,8 +33,7 @@ typedef enum {
     ST_PASSWORD,
     ST_GAME,
     ST_PAUSE,
-    ST_WIN,
-    ST_GAMEOVER
+    ST_WIN
 } State;
 
 /* Current state. */
@@ -41,10 +46,17 @@ static uint8_t level;
 static uint8_t cursor_row;
 static uint8_t cursor_col;
 
-/* Proposed digit for the cursor cell (1-9). */
+/* Digit picked in edit mode (1-9). */
 static uint8_t entry_value;
 
-/* Title / pause / gameover menu selection. */
+/* 1 = digit-pick mode (Up/Down picks, A confirms, B cancels). */
+static uint8_t editing;
+
+/* Completed levels in this session (1 = beaten, shown with `*`).
+ * Static storage starts at zero: nothing is complete at boot. */
+static uint8_t completed[LEVEL_COUNT];
+
+/* Title / pause menu selection. On SELECT it is the level cursor. */
 static uint8_t menu_choice;
 
 /* Password entry digits + edited slot + error flag. */
@@ -52,7 +64,66 @@ static uint8_t pwd_digits[PASSWORD_DIGITS];
 static uint8_t pwd_pos;
 static uint8_t pwd_bad;
 
-/* Start (or restart) a level: reset board, cursor, entry. */
+/* Frame counter (blink timing) + mistake feedback (frames, cursor hidden). */
+static uint8_t frame;
+static uint8_t flash;
+
+/* Blinking preview tracker. pv_row = 0xFF means "nothing tracked". */
+static uint8_t pv_row;
+static uint8_t pv_col;
+static uint8_t pv_val;
+static uint8_t pv_shown;
+
+/* Forget the preview without redrawing (caller already drew the cell). */
+static void preview_forget(void)
+{
+    pv_row = 0xFF;
+    pv_shown = 0;
+}
+
+/* Erase a visible preview, redrawing the cell from the board. */
+static void preview_erase(void)
+{
+    if (pv_shown && pv_row != 0xFF) {
+        ui_cell(pv_row, pv_col);
+    }
+    preview_forget();
+}
+
+/* Blink the picked digit in the cursor cell while editing. Call every
+ * frame in ST_GAME: the board is never touched, only tiles are drawn. */
+static void preview_update(void)
+{
+    uint8_t idx, want, phase;
+
+    idx = (uint8_t)(cursor_row * GRID_SIZE + cursor_col);
+    want = (editing && !board_is_given(idx));
+    if (!want || pv_row != cursor_row || pv_col != cursor_col ||
+        pv_val != entry_value) {
+        preview_erase();
+        if (want) {
+            pv_row = cursor_row;
+            pv_col = cursor_col;
+            pv_val = entry_value;
+        }
+    }
+    if (want) {
+        phase = (uint8_t)((frame >> 5) & 1); /* Toggle every 32 frames. */
+        if (phase != pv_shown) {
+            ui_preview(cursor_row, cursor_col, entry_value, phase);
+            pv_shown = phase;
+        }
+    }
+}
+
+/* Locked-cell feedback: blink the cursor off briefly. */
+static void locked_feedback(void)
+{
+    ui_cursor_hide();
+    flash = 20;
+}
+
+/* Start (or restart) a level: reset board, cursor, mode. */
 static void start_level(uint8_t new_level)
 {
     uint8_t r, c;
@@ -60,6 +131,8 @@ static void start_level(uint8_t new_level)
     level = new_level;
     board_load(level);
     entry_value = 1;
+    editing = 0;
+    flash = 0;
     /* Put the cursor on the first editable cell. */
     cursor_row = 0;
     cursor_col = 0;
@@ -73,10 +146,35 @@ static void start_level(uint8_t new_level)
             }
         }
     }
-    ui_game_full(level);
+    preview_forget();
+    ui_game_full();
     ui_cursor(cursor_row, cursor_col);
-    ui_message("");
     state = ST_GAME;
+}
+
+/* Back to the game screen (menu cleared it): redraw grid + cursor. */
+static void resume_game(void)
+{
+    editing = 0;
+    flash = 0;
+    preview_forget();
+    ui_game_full();
+    ui_cursor(cursor_row, cursor_col);
+    state = ST_GAME;
+}
+
+/* Enter the win screen for the current level. */
+static void win_now(void)
+{
+    completed[level] = 1;
+    ui_cursor_hide();
+    preview_forget();
+    if (level + 1 < LEVEL_COUNT) {
+        ui_win(level, password_for_level((uint8_t)(level + 1)), 0);
+    } else {
+        ui_win(level, 0, 1);
+    }
+    state = ST_WIN;
 }
 
 /* Move the cursor by (dr, dc), wrapping at the edges. */
@@ -84,30 +182,102 @@ static void move_cursor(int8_t dr, int8_t dc)
 {
     cursor_row = (uint8_t)((cursor_row + GRID_SIZE + dr) % GRID_SIZE);
     cursor_col = (uint8_t)((cursor_col + GRID_SIZE + dc) % GRID_SIZE);
+    flash = 0;
     ui_cursor(cursor_row, cursor_col);
-    ui_message("");
 }
 
-/* Title screen handler. */
-static void title_update(void)
+/* A on a cell: enter digit-pick mode (or complain if locked). */
+static void enter_editing(void)
 {
-    if (input_pressed(J_UP) || input_pressed(J_DOWN)) {
-        menu_choice = (uint8_t)(1 - menu_choice);
-        ui_title(menu_choice);
+    uint8_t idx, current;
+
+    idx = (uint8_t)(cursor_row * GRID_SIZE + cursor_col);
+    if (board_is_given(idx)) {
+        locked_feedback();
+        return;
+    }
+    /* Start from the digits already there (or 1 if empty). */
+    current = board_get(idx);
+    entry_value = current ? current : 1;
+    editing = 1;
+    flash = 0;
+    ui_cursor(cursor_row, cursor_col);
+}
+
+/* A in digit-pick mode: try the picked digit. */
+static void confirm_editing(void)
+{
+    uint8_t idx, old;
+
+    idx = (uint8_t)(cursor_row * GRID_SIZE + cursor_col);
+    old = board_get(idx);
+    board_set(idx, entry_value);
+    if (board_conflicts(idx)) {
+        /* Illegal move: restore, count a mistake, keep picking. */
+        board_set(idx, old);
+        ui_cell(cursor_row, cursor_col);
+        board_add_mistake();
+        ui_cursor_hide();
+        flash = 24;
+        return;
+    }
+    /* Legal move: show it, back to navigation, check for the win. */
+    editing = 0;
+    preview_forget();
+    ui_cell(cursor_row, cursor_col);
+    if (board_is_solved()) {
+        win_now();
+    }
+}
+
+/* B in digit-pick mode: back to navigation, board untouched. */
+static void cancel_editing(void)
+{
+    editing = 0;
+    preview_erase();
+}
+
+/* B on a cell: erase a player digit (givens complain). */
+static void erase_cell(void)
+{
+    uint8_t idx;
+
+    idx = (uint8_t)(cursor_row * GRID_SIZE + cursor_col);
+    if (board_is_given(idx)) {
+        if (board_get(idx) != 0) {
+            locked_feedback();
+        }
+        return;
+    }
+    if (board_get(idx) != 0) {
+        board_set(idx, 0);
+        ui_cell(cursor_row, cursor_col);
+    }
+}
+
+/* Level-select handler: free choice of any level, SELECT = password. */
+static void select_update(void)
+{
+    if (input_pressed(J_UP)) {
+        menu_choice = (uint8_t)((menu_choice + LEVEL_COUNT - 1) % LEVEL_COUNT);
+        ui_select(menu_choice, completed);
+    }
+    if (input_pressed(J_DOWN)) {
+        menu_choice = (uint8_t)((menu_choice + 1) % LEVEL_COUNT);
+        ui_select(menu_choice, completed);
+    }
+    if (input_pressed(J_SELECT)) {
+        pwd_digits[0] = 0;
+        pwd_digits[1] = 0;
+        pwd_digits[2] = 0;
+        pwd_digits[3] = 0;
+        pwd_pos = 0;
+        pwd_bad = 0;
+        ui_password(pwd_digits, pwd_pos, pwd_bad);
+        state = ST_PASSWORD;
     }
     if (input_pressed(J_A) || input_pressed(J_START)) {
-        if (menu_choice == 0) {
-            start_level(0);
-        } else {
-            pwd_digits[0] = 0;
-            pwd_digits[1] = 0;
-            pwd_digits[2] = 0;
-            pwd_digits[3] = 0;
-            pwd_pos = 0;
-            pwd_bad = 0;
-            ui_password(pwd_digits, pwd_pos, pwd_bad);
-            state = ST_PASSWORD;
-        }
+        start_level(menu_choice);
     }
 }
 
@@ -118,7 +288,7 @@ static void password_update(void)
     int8_t found;
 
     if (input_pressed(J_B)) {
-        ui_title(menu_choice);
+        ui_select(menu_choice, completed);
         state = ST_TITLE;
         return;
     }
@@ -146,136 +316,125 @@ static void password_update(void)
             pwd_bad = 1;
             ui_password(pwd_digits, pwd_pos, pwd_bad);
         } else {
-            start_level((uint8_t)found);
+            /* The password proves levels 1..N-1 beaten: mark them and
+             * jump to level N. Nothing is unlocked: every level is
+             * always playable, the password only restores the marks. */
+            uint8_t l;
+
+            for (l = 0; l < (uint8_t)found; l++) {
+                completed[l] = 1;
+            }
+            menu_choice = (uint8_t)found;
+            ui_select(menu_choice, completed);
+            state = ST_TITLE;
         }
     }
 }
-/* Confirm the proposed digit on the cursor cell. */
-static void confirm_entry(void)
-{
-    uint8_t idx;
 
-    idx = (uint8_t)(cursor_row * GRID_SIZE + cursor_col);
-    if (board_is_given(idx)) {
-        ui_message("LOCKED CELL");
-        return;
-    }
-    board_set(idx, entry_value);
-    if (board_conflicts(idx)) {
-        /* Illegal move: reject it and count a mistake. */
-        board_set(idx, 0);
-        ui_cell(cursor_row, cursor_col);
-        if (board_register_error()) {
-            menu_choice = 0;
-            ui_cursor_hide();
-            ui_gameover(menu_choice);
-            state = ST_GAMEOVER;
-        } else {
-            ui_mistakes();
-            ui_message("MISTAKE!");
-        }
-        return;
-    }
-    /* Legal move: show it and check for the win. */
-    ui_cell(cursor_row, cursor_col);
-    ui_message("");
-    if (board_is_solved()) {
-        ui_cursor_hide();
-        if (level + 1 < LEVEL_COUNT) {
-            ui_win(level, password_for_level((uint8_t)(level + 1)), 0);
-        } else {
-            ui_win(level, 0, 1);
-        }
-        state = ST_WIN;
-    }
-}
-
-/* Game screen handler. */
+/* Game screen handler: navigation vs digit-pick mode. */
 static void game_update(void)
 {
-    uint8_t idx;
-
     if (input_pressed(J_START)) {
+        editing = 0;
+        preview_erase();
+        flash = 0;
         menu_choice = 0;
-        ui_pause(menu_choice);
+        ui_pause(menu_choice, level);
         state = ST_PAUSE;
         return;
     }
-    if (input_dir(J_LEFT)) {
-        move_cursor(0, -1);
-        return;
-    }
-    if (input_dir(J_RIGHT)) {
-        move_cursor(0, 1);
-        return;
-    }
-    if (input_dir(J_UP)) {
-        /* Up cycles the digit on editable cells... */
-        idx = (uint8_t)(cursor_row * GRID_SIZE + cursor_col);
-        if (!board_is_given(idx)) {
+    if (editing) {
+        if (input_dir(J_UP)) {
             entry_value = (uint8_t)(entry_value % 9 + 1);
-            ui_entry(entry_value);
-        } else {
-            /* ...but moves the cursor on given cells. */
-            move_cursor(-1, 0);
-        }
-        return;
-    }
-    if (input_dir(J_DOWN)) {
-        idx = (uint8_t)(cursor_row * GRID_SIZE + cursor_col);
-        if (!board_is_given(idx)) {
+        } else if (input_dir(J_DOWN)) {
             entry_value = (uint8_t)((entry_value + 7) % 9 + 1);
-            ui_entry(entry_value);
-        } else {
+        }
+        if (input_pressed(J_A)) {
+            confirm_editing();
+        } else if (input_pressed(J_B)) {
+            cancel_editing();
+        }
+    } else {
+        if (input_dir(J_LEFT)) {
+            move_cursor(0, -1);
+        } else if (input_dir(J_RIGHT)) {
+            move_cursor(0, 1);
+        } else if (input_dir(J_UP)) {
+            move_cursor(-1, 0);
+        } else if (input_dir(J_DOWN)) {
             move_cursor(1, 0);
+        } else if (input_pressed(J_A)) {
+            enter_editing();
+        } else if (input_pressed(J_B)) {
+            erase_cell();
         }
-        return;
     }
-    if (input_pressed(J_A)) {
-        confirm_entry();
-        return;
-    }
-    if (input_pressed(J_B)) {
-        idx = (uint8_t)(cursor_row * GRID_SIZE + cursor_col);
-        if (!board_is_given(idx)) {
-            board_set(idx, 0);
-            ui_cell(cursor_row, cursor_col);
-            ui_message("");
-        } else {
-            ui_message("LOCKED CELL");
+    if (flash > 0) {
+        flash--;
+        if (flash == 0) {
+            ui_cursor(cursor_row, cursor_col);
         }
+    }
+    preview_update();
+}
+
+/* HINT: reveal the true digit of the cursor cell (or the first empty
+ * editable cell) and lock it, then back to the game. */
+static void do_hint(void)
+{
+    uint8_t idx, i, value;
+
+    idx = (uint8_t)(cursor_row * GRID_SIZE + cursor_col);
+    if (board_is_given(idx) || board_get(idx) != 0) {
+        idx = 0xFF;
+        for (i = 0; i < CELL_COUNT; i++) {
+            if (!board_is_given(i) && board_get(i) == 0) {
+                idx = i;
+                break;
+            }
+        }
+        if (idx == 0xFF) {
+            resume_game(); /* Full grid: win already triggered. */
+            return;
+        }
+        cursor_row = (uint8_t)(idx / GRID_SIZE);
+        cursor_col = (uint8_t)(idx % GRID_SIZE);
+    }
+    value = (uint8_t)(puzzles[level].solution[idx] - '0');
+    board_set(idx, value);
+    board_reveal(idx);
+    resume_game();
+    ui_cell(cursor_row, cursor_col);
+    if (board_is_solved()) {
+        win_now();
     }
 }
-/* Pause menu handler. */
+
+/* Pause (START menu) handler: RESUME / HINT / RESTART / TITLE. */
 static void pause_update(void)
 {
     if (input_pressed(J_UP)) {
-        menu_choice = (uint8_t)((menu_choice + 2) % 3);
-        ui_pause(menu_choice);
+        menu_choice = (uint8_t)((menu_choice + 3) % 4);
+        ui_pause(menu_choice, level);
     }
     if (input_pressed(J_DOWN)) {
-        menu_choice = (uint8_t)((menu_choice + 1) % 3);
-        ui_pause(menu_choice);
+        menu_choice = (uint8_t)((menu_choice + 1) % 4);
+        ui_pause(menu_choice, level);
     }
     if (input_pressed(J_B) || input_pressed(J_START)) {
-        /* Back to the game: redraw everything (menu cleared it). */
-        ui_game_full(level);
-        ui_entry(entry_value);
-        ui_cursor(cursor_row, cursor_col);
-        state = ST_GAME;
+        resume_game();
         return;
     }
     if (input_pressed(J_A)) {
         if (menu_choice == 0) {
-            ui_game_full(level);
-            ui_entry(entry_value);
-            ui_cursor(cursor_row, cursor_col);
-            state = ST_GAME;
+            resume_game();
         } else if (menu_choice == 1) {
+            do_hint();
+        } else if (menu_choice == 2) {
             start_level(level);
         } else {
             menu_choice = 0;
-            ui_title(menu_choice);
+            ui_select(menu_choice, completed);
             state = ST_TITLE;
         }
     }
@@ -289,25 +448,7 @@ static void win_update(void)
             start_level((uint8_t)(level + 1));
         } else {
             menu_choice = 0;
-            ui_title(menu_choice);
-            state = ST_TITLE;
-        }
-    }
-}
-
-/* Game over screen handler. */
-static void gameover_update(void)
-{
-    if (input_pressed(J_UP) || input_pressed(J_DOWN)) {
-        menu_choice = (uint8_t)(1 - menu_choice);
-        ui_gameover(menu_choice);
-    }
-    if (input_pressed(J_A) || input_pressed(J_START)) {
-        if (menu_choice == 0) {
-            start_level(level);
-        } else {
-            menu_choice = 0;
-            ui_title(menu_choice);
+            ui_select(menu_choice, completed);
             state = ST_TITLE;
         }
     }
@@ -325,14 +466,15 @@ void main(void)
     ui_init();
     input_poll_init();
     menu_choice = 0;
-    ui_title(menu_choice);
+    preview_forget();
+    ui_select(menu_choice, completed);
     state = ST_TITLE;
 
     while (1) {
         input_poll();
         switch (state) {
         case ST_TITLE:
-            title_update();
+            select_update();
             break;
         case ST_PASSWORD:
             password_update();
@@ -346,10 +488,8 @@ void main(void)
         case ST_WIN:
             win_update();
             break;
-        case ST_GAMEOVER:
-            gameover_update();
-            break;
         }
+        frame++;
         vsync();
     }
 }

@@ -19,7 +19,6 @@
 
 /* --- Levels ----------------------------------------------------------------- */
 #define LEVEL_COUNT 12 /* 4 EASY + 4 MEDIUM + 4 HARD. */
-#define MAX_ERRORS 3   /* 3 mistakes = game over. */
 
 /* --- Passwords (4 decimal digits) ------------------------------------------- */
 #define PASSWORD_DIGITS 4

@@ -5,73 +5,61 @@
  * ui.h — All screen drawing.
  *
  * Two layers:
- * - TEXT (GBDK font): header, footer, menus, messages.
- * - GRID (custom tiles from tiles.h): the 9x9 board starting at
- *   tile (GRID_X, GRID_Y) = (5, 3), one tile per cell, plus a 1-tile
- *   frame on the top and left. Thin 1px borders inside a 3x3 box,
- *   thick 2px borders between boxes and around the grid.
+ * - GAME (custom tiles from tiles.h): a fullscreen 9x9 grid of 16x16 px
+ *   cells at tile (GRID_X, GRID_Y) = (1, 0), i.e. 144x144 px = the whole
+ *   screen height, centered with a 1-tile margin left and right.
+ *   No header, no footer, no messages: the board IS the screen.
+ *   Everything else (level, mistakes, help) lives in the START menu.
+ * - MENUS (GBDK font): title, password entry, START menu, win screen.
  *
- * Game screen layout (20x18 tile rows):
- *   row  0: "SUDOKU L01 EASY"   title + level + difficulty
- *   row  1: "ERRORS X X ."      mistake slots (X = used)
- *   rows 3-12: grid + top frame (frame row 3, cells rows 4-12)
- *   row 13: "ENTER: 5"          proposed digit for the cursor cell
- *   row 14: "UP/DN NUM A:OK"    help line 1
- *   row 15: "B:DEL START:MENU"  help line 2
- *   row  16: messages        transient text ("MISTAKE!", ...)
- *
- * Cells with a digit use black (givens) or dark gray (player) tiles;
- * empty cells are blank tiles. The cursor is a sprite outline over
- * the cell: it never erases grid lines.
+ * Feedback without text: the proposed digit blinks inside the cursor
+ * cell (ui_preview); a rejected digit blinks the cursor off briefly
+ * (main.c hides it for a few frames); mistakes are only tallied and
+ * shown in the START menu — play never ends.
  * -------------------------------------------------------------------------*/
 
 #include "types.h"
 
 /* Grid origin on the background map (in tiles). */
-#define GRID_X 5
-#define GRID_Y 3
+#define GRID_X 1
+#define GRID_Y 0
 
 /* Init font + grid tiles + display. Call once at startup. */
 void ui_init(void);
 
 /* --- Screens (each hides the cursor and draws everything) --- */
 
-/* Title screen. `choice` 0 = NEW GAME, 1 = PASSWORD. */
-void ui_title(uint8_t choice);
+/* Level select: all 12 levels, freely playable. `pos` = cursor (0-11),
+ * `done[i]` = 1 shows level i+1 as complete (`*`). Session-only state:
+ * a password for level N marks levels 1..N-1 complete and jumps there. */
+void ui_select(uint8_t pos, const uint8_t *done);
 
 /* Password entry. `digits[4]`, `pos` = edited slot, `bad` = show error. */
 void ui_password(const uint8_t *digits, uint8_t pos, uint8_t bad);
 
-/* Game screen frame: header, full grid, footer. Redraws everything. */
-void ui_game_full(uint8_t level);
+/* Game screen: fullscreen grid + cursor sprite. No text at all. */
+void ui_game_full(void);
 
-/* Pause menu. `choice` 0 = RESUME, 1 = RESTART, 2 = TITLE. */
-void ui_pause(uint8_t choice);
+/* START menu. `choice` 0 = RESUME, 1 = HINT, 2 = RESTART, 3 = TITLE.
+ * Shows level, difficulty, mistake count and empty cells left. */
+void ui_pause(uint8_t choice, uint8_t level);
 
 /* Win screen. Shows password for next level, or completion text if last. */
 void ui_win(uint8_t level, uint16_t next_password, uint8_t is_last);
 
-/* Game over screen. `choice` 0 = RETRY, 1 = TITLE. */
-void ui_gameover(uint8_t choice);
-
 /* --- Game screen updates (no full clear, called every frame) --- */
 
-/* Redraw the mistake slots on row 1. */
-void ui_mistakes(void);
-
-/* Redraw the proposed digit on row 13. */
-void ui_entry(uint8_t value);
-
-/* Show a message on row 16 (empty string clears the line). */
-void ui_message(const char *text);
-
-/* Redraw one cell tile (digit or empty, keeps the borders). */
+/* Redraw one cell (2x2 tiles) from the board state. */
 void ui_cell(uint8_t row, uint8_t col);
 
-/* Move the cursor outline to cell (row, col). */
+/* Draw (`show` = 1) or erase (`show` = 0) the blinking proposed digit
+ * on cell (row, col). The board is untouched: erase redraws the cell. */
+void ui_preview(uint8_t row, uint8_t col, uint8_t value, uint8_t show);
+
+/* Move the 4-sprite cursor outline to cell (row, col). */
 void ui_cursor(uint8_t row, uint8_t col);
 
-/* Hide the cursor sprite (menus, win, game over). */
+/* Hide the cursor sprites (menus, win, mistake blink). */
 void ui_cursor_hide(void);
 
 #endif /* UI_H */

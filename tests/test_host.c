@@ -17,7 +17,7 @@
 #include "puzzles.h"
 #include "types.h"
 
-/* All puzzles: 81 chars, valid digits, enough givens. */
+/* All puzzles: 81 chars, valid digits, enough givens, solution matches. */
 static void test_puzzles_valid(void)
 {
     uint8_t level, i;
@@ -26,13 +26,17 @@ static void test_puzzles_valid(void)
     for (level = 0; level < LEVEL_COUNT; level++) {
         givens = 0;
         for (i = 0; i < CELL_COUNT; i++) {
-            char c = puzzles[level].givens[i];
-            assert(c >= '0' && c <= '9');
-            if (c != '0') {
+            char g = puzzles[level].givens[i];
+            char s = puzzles[level].solution[i];
+            assert(g >= '0' && g <= '9');
+            assert(s >= '1' && s <= '9');
+            if (g != '0') {
                 givens++;
+                assert(g == s); /* Given cells match the solution. */
             }
         }
         assert(puzzles[level].givens[CELL_COUNT] == '\0');
+        assert(puzzles[level].solution[CELL_COUNT] == '\0');
         assert(givens >= 25); /* Sanity: a real puzzle, not empty. */
         printf("level %02d %-6s givens=%d OK\n",
                level + 1, difficulty_name(puzzles[level].difficulty), givens);
@@ -84,16 +88,46 @@ static void test_conflicts(void)
     printf("conflicts OK\n");
 }
 
-/* Mistake counter: 3 mistakes = game over. */
+/* Mistake counter: tallied forever, no game over. */
 static void test_mistakes(void)
 {
+    uint8_t i;
+
     board_load(0);
     assert(board_errors() == 0);
-    assert(board_register_error() == 0); /* 1st: still alive */
-    assert(board_register_error() == 0); /* 2nd: still alive */
-    assert(board_register_error() == 1); /* 3rd: game over */
-    assert(board_errors() == MAX_ERRORS);
+    board_add_mistake();
+    board_add_mistake();
+    board_add_mistake();
+    assert(board_errors() == 3); /* 3 mistakes: still playing. */
+    for (i = 0; i < 250; i++) {
+        board_add_mistake();
+    }
+    board_add_mistake();
+    board_add_mistake();
+    assert(board_errors() == 255); /* Saturates, never wraps. */
     printf("mistakes OK\n");
+}
+
+/* HINT: reveal locks the cell with the solution digit. */
+static void test_hint(void)
+{
+    uint8_t idx, value;
+
+    board_load(0);
+    /* First editable cell. */
+    for (idx = 0; idx < CELL_COUNT; idx++) {
+        if (!board_is_given(idx)) {
+            break;
+        }
+    }
+    assert(idx < CELL_COUNT);
+    value = (uint8_t)(puzzles[0].solution[idx] - '0');
+    board_set(idx, value);
+    assert(board_conflicts(idx) == 0); /* Solution digit is legal. */
+    board_reveal(idx);
+    assert(board_is_given(idx) == 1); /* Locked like a given now. */
+    assert(board_get(idx) == value);
+    printf("hint OK\n");
 }
 
 /* Passwords: unique per level, roundtrip find works. */
@@ -123,6 +157,7 @@ int main(void)
     test_board_load();
     test_conflicts();
     test_mistakes();
+    test_hint();
     test_passwords();
     printf("ALL HOST TESTS PASSED\n");
     return 0;

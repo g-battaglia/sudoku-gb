@@ -8,8 +8,8 @@
 /* Working grid: 81 values 0-9, index = row * 9 + column. */
 static uint8_t cells[CELL_COUNT];
 
-/* Givens of the loaded level (81-char string in ROM). */
-static const char *givens_ref;
+/* Locked cells: 1 = given or revealed by HINT (not editable). */
+static uint8_t locked[CELL_COUNT];
 
 /* Mistakes made in the current game. */
 static uint8_t error_count;
@@ -20,14 +20,16 @@ static uint8_t cell_index(uint8_t row, uint8_t col)
     return (uint8_t)(row * GRID_SIZE + col);
 }
 
-/* Load level `level` (0-based): reset grid and mistakes. */
+/* Load level `level` (0-based): reset grid, locks and mistakes. */
 void board_load(uint8_t level)
 {
     uint8_t i;
+    const char *givens;
 
-    givens_ref = puzzles[level].givens;
+    givens = puzzles[level].givens;
     for (i = 0; i < CELL_COUNT; i++) {
-        cells[i] = (uint8_t)(givens_ref[i] - '0');
+        cells[i] = (uint8_t)(givens[i] - '0');
+        locked[i] = (uint8_t)(givens[i] != '0');
     }
     error_count = 0;
 }
@@ -38,10 +40,10 @@ uint8_t board_get(uint8_t idx)
     return cells[idx];
 }
 
-/* Return 1 if cell `idx` is a given, 0 if editable. */
+/* Return 1 if cell `idx` is locked (given or hint), 0 if editable. */
 uint8_t board_is_given(uint8_t idx)
 {
-    return givens_ref[idx] != '0';
+    return locked[idx];
 }
 
 /* Write `value` (0-9) into cell `idx`, unchecked. */
@@ -100,19 +102,24 @@ uint8_t board_is_solved(void)
     return 1;
 }
 
-/* --- Mistake counter: lives here because "max 3" is a game rule. -------- */
+/* --- Mistakes: tallied only, play never ends. ---------------------------- */
 
-/* Mistakes made so far (0-MAX_ERRORS). */
+/* Mistakes made so far (0-255, saturates). */
 uint8_t board_errors(void)
 {
     return error_count;
 }
 
-/* Record one mistake. Return 1 if the game is lost (too many mistakes). */
-uint8_t board_register_error(void)
+/* Record one mistake. */
+void board_add_mistake(void)
 {
     if (error_count < 255) {
         error_count++;
     }
-    return error_count >= MAX_ERRORS;
+}
+
+/* Lock cell `idx` as a given (used by HINT). */
+void board_reveal(uint8_t idx)
+{
+    locked[idx] = 1;
 }

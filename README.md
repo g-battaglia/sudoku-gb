@@ -1,7 +1,13 @@
 # Sudoku GB
 
-Sudoku for Game Boy Classic (DMG). 12 levels, passwords, no save, no audio.
+Sudoku for Game Boy Classic (DMG). 12 levels, passwords, hints, no save,
+no audio, no game over (infinite play, mistakes only tallied).
 Toolchain: GBDK-2020 (vendored in `tools/gbdk/`). Everything in English.
+
+## Screen
+
+Fullscreen 9x9 grid (16x16 px cells, chunky 2x digits, 2px box lines).
+No header/footer in game: level, mistakes and help live in the START menu.
 
 ## Build
 
@@ -17,19 +23,24 @@ make clean
 
 ## Controls
 
+- Select screen: Up/Down choose any of the 12 levels, A plays,
+  SELECT opens password entry.
 - D-Pad: move cursor (wraps at edges, auto-repeat when held)
-- Up/Down on editable cell: change proposed digit (ENTER row)
-- Up/Down/Left/Right on given cell: move cursor
-- A: confirm digit / menu OK (wrong digit = 1 mistake, move rejected)
-- B: erase player digit / back
-- START: pause (RESUME / RESTART / TITLE)
+- A on a cell: digit-pick mode (picked digit blinks in the cell)
+  - Up/Down: pick digit 1-9, A: confirm, B: back (no change)
+  - Wrong digit = rejected + 1 mistake, keep picking
+- B: erase player digit (locked cells blink the cursor)
+- START: menu (RESUME / HINT / RESTART / TITLE) + status + help
 
 ## Rules
 
-- 3 mistakes = game over (RETRY / TITLE).
+- No game over: play forever, mistakes are only counted (START menu).
+- HINT reveals the true digit of a cell and locks it (free, unlimited).
 - Full grid = win (conflicts are always rejected, puzzles are unique).
-- Win shows the 4-digit password for the next level.
-- Title: NEW GAME (level 1) or PASSWORD (jump to any level).
+- Win shows the 4-digit password for the next level (to restore `*`).
+- Boot shows all 12 levels free: A plays any of them, `*` = beaten.
+- A password never unlocks: it only marks levels 1..N-1 `*` and jumps
+  to level N (progress display is session-only, there is no save).
 
 ## Passwords
 
@@ -53,6 +64,6 @@ make clean
 - `src/types.h` — constants. `src/board.*` — rules. `src/passwords.*` — codes.
 - `src/puzzles.*` + `src/puzzles_gen.c` (generated, do not edit).
 - `src/input.*` — joypad debounce. `src/ui.*` — screens + tile grid + sprite cursor.
-- `src/tiles.*` — procedural 8x8 grid/frame/cursor tiles (no assets).
+- `src/tiles.*` — procedural 16x16 grid tiles + 4-sprite cursor (no assets).
 - `src/main.c` — state machine. `tools/gen_puzzles.py` — generator.
 - `tests/test_host.c` — gcc tests. `PLAN.md` — full plan.
