@@ -164,6 +164,7 @@ patterns resident); text is font tiles, never stdio.
 | Pick | A / B | Confirm (conflict -> mistake, keep picking) / back |
 | Game | B | Erase player digit (locked cells blink) |
 | Game | START | Menu: RESUME / HINT / SAVE / PLAY AGAIN / MENU |
+| Any | A+B+START+SELECT | Soft reset to the boot menu (save kept) |
 | Menus/Win | D-Pad + A (+B back) | Navigate, confirm, cancel |
 
 ## 6. States (main.c)

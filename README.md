@@ -41,6 +41,7 @@ make clean
   - Wrong digit = rejected + 1 mistake, keep picking
 - B: erase player digit (locked cells blink the cursor)
 - START: menu (RESUME / HINT / SAVE / PLAY AGAIN / MENU) + status + help
+- A+B+START+SELECT: soft reset (boot menu again, battery save kept)
 
 ## Rules
 

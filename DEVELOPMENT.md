@@ -99,7 +99,10 @@ are deterministic — running twice produces byte-identical files.
 7. **`src/input.h` + `src/input.c`** — the Game Boy has no key
    *events*, only "buttons held right now". This module remembers last
    frame's buttons and reports each physical press once (`pressed`),
-   plus auto-repeat for held directions (`dir`).
+   plus auto-repeat for held directions (`dir`), and fires once when
+   A+B+START+SELECT are all held (`input_reset_combo`) — `main.c`
+   then jumps back to `0x0100`, the boot entry, which clears RAM and
+   restarts with the battery save intact.
 8. **`src/main.c`** — the conductor. One `switch (state)` loop, one
    small handler per state (`select_update`, `game_update`,
    `pause_update`, `win_update`, `saved_update`). It owns the cursor,

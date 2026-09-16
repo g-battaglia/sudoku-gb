@@ -20,7 +20,9 @@ inner lines and player digits). Dynamics: D-Pad moves the cursor
 (solid 2px ring), **A = digit-pick mode** (Up/Down and Left/Right
 pick the blinking digit, A confirm, B back), B erases, START menu
 has centered status + RESUME / HINT / SAVE / PLAY AGAIN / MENU +
-3-line help. **No game over** (mistakes tallied only). Boot =
+3-line help. **No game over** (mistakes tallied only). **A+B+START+
+SELECT = soft reset** (jump to 0x0100: RAM cleared like a power
+cycle, battery SRAM untouched). Boot =
 **mode select** (EASY / MEDIUM / HARD + LOAD when a valid battery
 save exists) then **free level select** (100 levels of that mode,
 10 pages of 10, `*` = beaten, `<` marks the cursor row, `B` returns
@@ -52,7 +54,8 @@ make clean
 
 Last verified: zero warnings; `check` 32768 bytes / logo OK / cart 0x03
 / SRAM 8KB; `test-host` ALL PASSED; `test-emulator` SMOKE PASSED
-(164 checks, incl. save → power-cycle → LOAD and win-marks);
+(171 checks, incl. save → power-cycle → LOAD, win-marks and the
+A+B+START+SELECT soft reset);
 real usage ~28KB (~4KB slack). Both generators deterministic
 (double run = identical md5).
 

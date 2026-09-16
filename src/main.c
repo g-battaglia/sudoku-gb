@@ -27,6 +27,7 @@
  *     A ...... confirm, B = back without changing
  *   B ........ erase a player digit
  *   START .... pause menu (RESUME / HINT / SAVE / PLAY AGAIN / MENU)
+ *   A+B+START+SELECT ... soft reset (boot menu again, save kept)
  * -------------------------------------------------------------------------*/
 
 /* Game states. */
@@ -557,6 +558,19 @@ static void win_update(void)
     }
 }
 
+/* Soft reset (A+B+START+SELECT): jump back to the boot entry at
+ * 0x0100. The startup code clears RAM and calls main() again, like a
+ * power cycle — while battery SRAM (marks, saved game) is untouched,
+ * so LOAD still works after the reset. */
+static void soft_reset(void)
+{
+    __asm__("jp 0x0100");
+    /* Not reached: keep the CPU parked if the jump ever were. */
+    while (1) {
+        vsync();
+    }
+}
+
 /* Entry point. */
 void main(void)
 {
@@ -588,6 +602,9 @@ void main(void)
 
     while (1) {
         input_poll();
+        if (input_reset_combo()) {
+            soft_reset();
+        }
         switch (state) {
         case ST_DIFF:
             diff_update();

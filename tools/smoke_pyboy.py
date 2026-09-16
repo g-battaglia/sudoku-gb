@@ -437,6 +437,21 @@ check("next row selected", text_row(4).strip() == "002<")
 check("done count shown", text_row(16).strip() == "DONE 001/100")
 p.screen.image.save("/tmp/smoke_load.png")
 
+# 9. A+B+START+SELECT: soft reset to the boot menu; battery SRAM is
+# untouched, so LOAD is still offered (and the reset re-boots cleanly:
+# LCD on, menu mode, sprites parked).
+COMBO = ("a", "b", "start", "select")
+for b in COMBO:
+    p.button_press(b)
+p.tick(12)
+for b in COMBO:
+    p.button_release(b)
+idle(280)
+check("reset returns to boot menu", text_row(3).strip() == "DIFFICULTY")
+check("reset keeps battery save", text_row(10).strip() == "LOAD")
+check("reset LCD on + menu mode", lcd_on() and lcd() & 0x12 == 0x00)
+check("reset OAM parked", cursor_parked(oam()))
+
 p.stop()
 print("SMOKE " + ("PASSED" if not FAILURES else f"FAILED: {FAILURES}"))
 sys.exit(1 if FAILURES else 0)

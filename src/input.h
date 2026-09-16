@@ -33,4 +33,8 @@ uint8_t input_pressed(uint8_t mask);
  * true on the first press, then repeatedly while held (after a delay). */
 uint8_t input_dir(uint8_t mask);
 
+/* Return 1 on the frame A+B+START+SELECT become all held (the
+ * classic Game Boy soft-reset combo). */
+uint8_t input_reset_combo(void);
+
 #endif /* INPUT_H */

@@ -25,12 +25,18 @@ static uint8_t just_pressed;
 /* How long the current direction mask has been held. */
 static uint8_t repeat_count;
 
+/* 1 on the frame the A+B+START+SELECT combo becomes complete. */
+static uint8_t combo_fire;
+
+#define COMBO_MASK (J_A | J_B | J_START | J_SELECT)
+
 /* Clear internal state. Call once at startup. */
 void input_poll_init(void)
 {
     prev_state = 0;
     just_pressed = 0;
     repeat_count = 0;
+    combo_fire = 0;
 }
 
 /* Read the joypad. Call once per frame, before any input_* query. */
@@ -40,6 +46,10 @@ void input_poll(void)
 
     now = joypad();
     just_pressed = (uint8_t)(now & (uint8_t)~prev_state);
+    /* Reset combo: fires once, when the last of the four buttons
+     * joins (all held together for the first time this press). */
+    combo_fire = (uint8_t)((now & COMBO_MASK) == COMBO_MASK &&
+                           (prev_state & COMBO_MASK) != COMBO_MASK);
     if ((now & (J_UP | J_DOWN | J_LEFT | J_RIGHT)) == 0) {
         /* No direction held: reset the repeat timer. */
         repeat_count = 0;
@@ -73,4 +83,11 @@ uint8_t input_dir(uint8_t mask)
         return 0;
     }
     return ((uint8_t)(repeat_count - REPEAT_DELAY) % REPEAT_RATE) == 0;
+}
+
+/* Return 1 on the frame A+B+START+SELECT become all held
+ * (classic soft-reset combo, handled by main.c). */
+uint8_t input_reset_combo(void)
+{
+    return combo_fire;
 }
