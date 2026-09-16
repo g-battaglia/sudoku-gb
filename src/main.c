@@ -3,20 +3,19 @@
 #include "types.h"
 #include "board.h"
 #include "input.h"
-#include "passwords.h"
 #include "puzzles.h"
 #include "ui.h"
 
 /* ---------------------------------------------------------------------------
  * main.c — Game flow. One state machine, one small handler per state.
  *
- * States: SELECT -> PASSWORD? -> GAME <-> PAUSE -> WIN.
+ * States: SELECT -> GAME <-> PAUSE -> WIN.
  * Each frame: poll input once, run the current handler, wait for VBlank.
  * No game over: mistakes are only tallied (START menu) and play goes on.
  *
- * Select screen: all 12 levels are freely playable from boot.
- * A password never unlocks anything: it only marks the beaten levels
- * (`*`) and jumps to the next one to play.
+ * Select screen: all 100 levels are freely playable from boot, 10 per
+ * page. There are no passwords and no unlocks: beaten levels just show
+ * `*` for the session.
  *
  * Game controls:
  *   D-Pad .... move cursor (wraps at grid edges)
@@ -30,7 +29,6 @@
 /* Game states. */
 typedef enum {
     ST_TITLE,
-    ST_PASSWORD,
     ST_GAME,
     ST_PAUSE,
     ST_WIN
@@ -56,13 +54,19 @@ static uint8_t editing;
  * Static storage starts at zero: nothing is complete at boot. */
 static uint8_t completed[LEVEL_COUNT];
 
-/* Title / pause menu selection. On SELECT it is the level cursor. */
+/* Pause menu selection (0-3). Select screen uses sel_page/sel_row. */
 static uint8_t menu_choice;
 
-/* Password entry digits + edited slot + error flag. */
-static uint8_t pwd_digits[PASSWORD_DIGITS];
-static uint8_t pwd_pos;
-static uint8_t pwd_bad;
+/* Select screen position: page 0-9, row 0-9 (level = page*10+row). */
+static uint8_t sel_page;
+static uint8_t sel_row;
+
+/* Pending win screen (drawn on WIN state entry, flat from main: drawing
+ * it nested inside the game update garbles the menu text, so win_now
+ * only records it). */
+static uint8_t need_win_draw;
+static uint8_t win_level;
+static uint8_t win_last;
 
 /* Frame counter (blink timing) + mistake feedback (frames, cursor hidden). */
 static uint8_t frame;
@@ -163,17 +167,16 @@ static void resume_game(void)
     state = ST_GAME;
 }
 
-/* Enter the win screen for the current level. */
+/* Record the win for the current level. The screen itself is drawn on
+ * WIN state entry (flat from main, never nested in the game update). */
 static void win_now(void)
 {
     completed[level] = 1;
     ui_cursor_hide();
     preview_forget();
-    if (level + 1 < LEVEL_COUNT) {
-        ui_win(level, password_for_level((uint8_t)(level + 1)), 0);
-    } else {
-        ui_win(level, 0, 1);
-    }
+    win_level = level;
+    win_last = (uint8_t)((level + 1 < LEVEL_COUNT) ? 0 : 1);
+    need_win_draw = 1;
     state = ST_WIN;
 }
 
@@ -255,79 +258,27 @@ static void erase_cell(void)
     }
 }
 
-/* Level-select handler: free choice of any level, SELECT = password. */
+/* Level-select handler: Up/Down = row, Left/Right = page, A = play. */
 static void select_update(void)
 {
     if (input_pressed(J_UP)) {
-        menu_choice = (uint8_t)((menu_choice + LEVEL_COUNT - 1) % LEVEL_COUNT);
-        ui_select(menu_choice, completed);
+        sel_row = (uint8_t)((sel_row + LEVELS_PER_PAGE - 1) % LEVELS_PER_PAGE);
+        ui_select(sel_page, sel_row, completed);
     }
     if (input_pressed(J_DOWN)) {
-        menu_choice = (uint8_t)((menu_choice + 1) % LEVEL_COUNT);
-        ui_select(menu_choice, completed);
-    }
-    if (input_pressed(J_SELECT)) {
-        pwd_digits[0] = 0;
-        pwd_digits[1] = 0;
-        pwd_digits[2] = 0;
-        pwd_digits[3] = 0;
-        pwd_pos = 0;
-        pwd_bad = 0;
-        ui_password(pwd_digits, pwd_pos, pwd_bad);
-        state = ST_PASSWORD;
-    }
-    if (input_pressed(J_A) || input_pressed(J_START)) {
-        start_level(menu_choice);
-    }
-}
-
-/* Password entry handler. */
-static void password_update(void)
-{
-    uint16_t code;
-    int8_t found;
-
-    if (input_pressed(J_B)) {
-        ui_select(menu_choice, completed);
-        state = ST_TITLE;
-        return;
-    }
-    if (input_dir(J_UP)) {
-        pwd_digits[pwd_pos] = (uint8_t)((pwd_digits[pwd_pos] + 1) % 10);
-        ui_password(pwd_digits, pwd_pos, 0);
-    }
-    if (input_dir(J_DOWN)) {
-        pwd_digits[pwd_pos] = (uint8_t)((pwd_digits[pwd_pos] + 9) % 10);
-        ui_password(pwd_digits, pwd_pos, 0);
+        sel_row = (uint8_t)((sel_row + 1) % LEVELS_PER_PAGE);
+        ui_select(sel_page, sel_row, completed);
     }
     if (input_pressed(J_LEFT)) {
-        pwd_pos = (uint8_t)((pwd_pos + PASSWORD_DIGITS - 1) % PASSWORD_DIGITS);
-        ui_password(pwd_digits, pwd_pos, 0);
+        sel_page = (uint8_t)((sel_page + 9) % 10);
+        ui_select(sel_page, sel_row, completed);
     }
     if (input_pressed(J_RIGHT)) {
-        pwd_pos = (uint8_t)((pwd_pos + 1) % PASSWORD_DIGITS);
-        ui_password(pwd_digits, pwd_pos, 0);
+        sel_page = (uint8_t)((sel_page + 1) % 10);
+        ui_select(sel_page, sel_row, completed);
     }
     if (input_pressed(J_A) || input_pressed(J_START)) {
-        code = (uint16_t)(pwd_digits[0] * 1000 + pwd_digits[1] * 100 +
-                          pwd_digits[2] * 10 + pwd_digits[3]);
-        found = password_find_level(code);
-        if (found < 0) {
-            pwd_bad = 1;
-            ui_password(pwd_digits, pwd_pos, pwd_bad);
-        } else {
-            /* The password proves levels 1..N-1 beaten: mark them and
-             * jump to level N. Nothing is unlocked: every level is
-             * always playable, the password only restores the marks. */
-            uint8_t l;
-
-            for (l = 0; l < (uint8_t)found; l++) {
-                completed[l] = 1;
-            }
-            menu_choice = (uint8_t)found;
-            ui_select(menu_choice, completed);
-            state = ST_TITLE;
-        }
+        start_level((uint8_t)(sel_page * LEVELS_PER_PAGE + sel_row));
     }
 }
 
@@ -403,6 +354,11 @@ static void do_hint(void)
     value = (uint8_t)(puzzles[level].solution[idx] - '0');
     board_set(idx, value);
     board_reveal(idx);
+    if (board_is_solved()) {
+        /* Won by hint: no need to redraw the grid first. */
+        win_now();
+        return;
+    }
     resume_game();
     ui_cell(cursor_row, cursor_col);
     if (board_is_solved()) {
@@ -433,8 +389,7 @@ static void pause_update(void)
         } else if (menu_choice == 2) {
             start_level(level);
         } else {
-            menu_choice = 0;
-            ui_select(menu_choice, completed);
+            ui_select(sel_page, sel_row, completed);
             state = ST_TITLE;
         }
     }
@@ -447,8 +402,7 @@ static void win_update(void)
         if (level + 1 < LEVEL_COUNT) {
             start_level((uint8_t)(level + 1));
         } else {
-            menu_choice = 0;
-            ui_select(menu_choice, completed);
+            ui_select(sel_page, sel_row, completed);
             state = ST_TITLE;
         }
     }
@@ -465,9 +419,11 @@ void main(void)
     }
     ui_init();
     input_poll_init();
+    sel_page = 0;
+    sel_row = 0;
     menu_choice = 0;
     preview_forget();
-    ui_select(menu_choice, completed);
+    ui_select(sel_page, sel_row, completed);
     state = ST_TITLE;
 
     while (1) {
@@ -476,9 +432,6 @@ void main(void)
         case ST_TITLE:
             select_update();
             break;
-        case ST_PASSWORD:
-            password_update();
-            break;
         case ST_GAME:
             game_update();
             break;
@@ -486,6 +439,10 @@ void main(void)
             pause_update();
             break;
         case ST_WIN:
+            if (need_win_draw) {
+                ui_win(win_level, win_last);
+                need_win_draw = 0;
+            }
             win_update();
             break;
         }

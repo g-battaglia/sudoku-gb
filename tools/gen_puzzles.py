@@ -21,9 +21,9 @@ import sys
 
 # (difficulty_name, puzzle_count, givens_target)
 DIFFICULTIES = [
-    ("EASY", 4, 42),
-    ("MEDIUM", 4, 34),
-    ("HARD", 4, 29),
+    ("EASY", 34, 42),
+    ("MEDIUM", 33, 34),
+    ("HARD", 33, 29),
 ]
 
 SECRET_SEED_DEFAULT = 20260916

@@ -18,10 +18,7 @@
 #define BOX_SIZE 3     /* 3x3 boxes. */
 
 /* --- Levels ----------------------------------------------------------------- */
-#define LEVEL_COUNT 12 /* 4 EASY + 4 MEDIUM + 4 HARD. */
-
-/* --- Passwords (4 decimal digits) ------------------------------------------- */
-#define PASSWORD_DIGITS 4
+#define LEVEL_COUNT 100 /* 34 EASY + 33 MEDIUM + 33 HARD. */
 
 /* --- Screen ----------------------------------------------------------------- */
 #define SCREEN_COLS 20 /* GBDK font is 8x8: 160/8 = 20 columns. */

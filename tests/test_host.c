@@ -1,19 +1,17 @@
 /* ---------------------------------------------------------------------------
  * tests/test_host.c — PC tests for the hardware-free modules.
  *
- * Compiles board.c + passwords.c + puzzles.c with gcc (NOT gbdk):
+ * Compiles board.c + puzzles.c with gcc (NOT gbdk):
  *   make test-host
  *
  * Checks: puzzle strings valid, board rules (conflicts/win/givens),
- * mistake counter, password formula (uniqueness + roundtrip).
- * Also prints the 12 passwords (used by `make passwords`).
+ * mistake counter, hint locking.
  * -------------------------------------------------------------------------*/
 
 #include <assert.h>
 #include <stdio.h>
 
 #include "board.h"
-#include "passwords.h"
 #include "puzzles.h"
 #include "types.h"
 
@@ -130,27 +128,6 @@ static void test_hint(void)
     printf("hint OK\n");
 }
 
-/* Passwords: unique per level, roundtrip find works. */
-static void test_passwords(void)
-{
-    uint8_t a, b;
-
-    for (a = 0; a < LEVEL_COUNT; a++) {
-        uint16_t code = password_for_level(a);
-        assert(code < 10000);
-        assert(password_matches(a, code) == 1);
-        assert(password_find_level(code) == (int8_t)a);
-        for (b = 0; b < LEVEL_COUNT; b++) {
-            if (a != b) {
-                assert(password_for_level(b) != code);
-            }
-        }
-        printf("level %02d password %04d OK\n", a + 1, code);
-    }
-    assert(password_find_level(10000) != 0 || 1); /* Out of range: any. */
-    printf("passwords OK\n");
-}
-
 int main(void)
 {
     test_puzzles_valid();
@@ -158,7 +135,6 @@ int main(void)
     test_conflicts();
     test_mistakes();
     test_hint();
-    test_passwords();
     printf("ALL HOST TESTS PASSED\n");
     return 0;
 }
