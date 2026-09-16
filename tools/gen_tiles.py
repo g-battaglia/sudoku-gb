@@ -122,6 +122,8 @@ def build():
     return tiles
 
 
+# 2bpp rows: 0xFF = 8 black pixels; 0xC0/0x03 = 2 black pixels
+# (left/right). Plain 2px ring: same weight as the grid lines.
 CURSOR = [
     # TL: full top rows + left columns.
     [0xFF, 0xFF, 0xFF, 0xFF] + [0xC0, 0xC0] * 6,

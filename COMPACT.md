@@ -15,9 +15,10 @@ warnings) into `build/sudoku.gb` (ROM ONLY `0x00`, Nintendo logo OK,
 ~27.8KB used of 32KB) and passes PC host tests plus a headless PyBoy
 smoke test. Game screen = **fullscreen 9x9 grid** (16x16 px cells,
 chunky 2x digits, black box/frame lines, dark-gray inner lines and
-player digits). Dynamics: D-Pad moves, **A = digit-pick mode** (Up/Down
-pick blinking digit, A confirm, B back), B erases, START menu has status
-+ RESUME / HINT / RESTART / TITLE. **No game over** (mistakes tallied
+player digits). Dynamics: D-Pad moves the cursor (solid 2px ring),
+**A = digit-pick mode** (Up/Down pick blinking digit, A confirm,
+B back), B erases, START menu has centered status + RESUME / HINT /
+RESTART / TITLE + 3-line help. **No game over** (mistakes tallied
 only). Boot = **free level select** (100 levels, 10 pages of 10,
 `*` = beaten this session). Original clues are black; player digits and
 HINT reveals are dark gray (hints stay locked).

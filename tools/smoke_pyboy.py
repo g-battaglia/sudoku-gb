@@ -228,6 +228,7 @@ check("cursor sprite moved",
       (p.memory[0xFE00], p.memory[0xFE01]) != (oy0, ox0))
 
 # 5. Edit blink: cell tiles toggle, then B restores the empty cell.
+# Cursor starts on the first editable (empty) cell of level 1.
 cr, cc = cursor_cell()
 val, _ = cell_content(cr, cc)
 check("cursor on empty cell", val == 0)

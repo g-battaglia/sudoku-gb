@@ -311,37 +311,70 @@ static void draw_game_content(void)
     }
 }
 
-/* Draw the START menu content (status + items + help). */
+/* Pause menu items + their centered columns (marker sits 2 left). */
+static const char *PAUSE_ITEMS[4] = {"RESUME", "HINT", "RESTART", "TITLE"};
+static const uint8_t PAUSE_ITEM_X[4] = {7, 8, 6, 7};
+
+/* Width of a NUL-terminated string, in tiles. */
+static uint8_t text_w(const char *s)
+{
+    uint8_t n;
+
+    n = 0;
+    while (s[n] != 0) {
+        n++;
+    }
+    return n;
+}
+
+/* Width of 0-255 with draw_num padding (1-3 digits). */
+static uint8_t num_w(uint8_t n)
+{
+    return (n >= 100) ? 3 : ((n >= 10) ? 2 : 1);
+}
+
+/* Draw a NUL-terminated string centered on row y. */
+static void draw_centered(uint8_t y, const char *s)
+{
+    draw_text((uint8_t)((SCREEN_COLS - text_w(s)) / 2), y, s);
+}
+
+/* Draw the START menu content: three centered status lines, four
+ * centered items, four centered help lines. Every line is symmetric
+ * around the screen middle; nothing is ragged. */
 static void draw_pause_content(uint8_t choice, uint8_t level)
 {
-    uint8_t i, x;
-    static const char *ITEMS[4] = {"RESUME", "HINT", "RESTART", "TITLE"};
+    uint8_t i, x, w, e, l;
 
-    draw_text(1, 1, "L");
-    x = 2;
+    w = (uint8_t)(6 + 3 + 1 + num_w(LEVEL_COUNT));
+    x = (uint8_t)((SCREEN_COLS - w) / 2);
+    draw_text(x, 1, "LEVEL ");
+    x += 6;
     x += draw_dec3(x, 1, (uint8_t)(level + 1));
     draw_text(x, 1, "/");
     x++;
-    x += draw_num(x, 1, LEVEL_COUNT);
-    draw_text(x, 1, " ");
-    x++;
-    draw_text(x, 1, difficulty_name(puzzles[level].difficulty));
-    draw_text(1, 2, "ERR ");
-    x = 5;
-    x += draw_num(x, 2, board_errors());
-    draw_text(x, 2, " LEFT ");
+    draw_num(x, 1, LEVEL_COUNT);
+    draw_centered(2, difficulty_name(puzzles[level].difficulty));
+    e = board_errors();
+    l = count_empty();
+    w = (uint8_t)(3 + 1 + num_w(e) + 1 + 4 + 1 + num_w(l));
+    x = (uint8_t)((SCREEN_COLS - w) / 2);
+    draw_text(x, 3, "ERR ");
+    x += 4;
+    x += draw_num(x, 3, e);
+    draw_text(x, 3, " LEFT ");
     x += 6;
-    draw_num(x, 2, count_empty());
-    draw_text(2, 4, "------------------");
+    draw_num(x, 3, l);
+    draw_text(1, 5, "------------------");
     for (i = 0; i < 4; i++) {
-        map_tile(5, (uint8_t)(6 + i),
+        map_tile((uint8_t)(PAUSE_ITEM_X[i] - 2), (uint8_t)(6 + i),
                  (uint8_t)((choice == i ? '>' : ' ') - 32));
-        draw_text(7, (uint8_t)(6 + i), ITEMS[i]);
+        draw_text(PAUSE_ITEM_X[i], (uint8_t)(6 + i), PAUSE_ITEMS[i]);
     }
-    draw_text(2, 11, "------------------");
-    draw_text(2, 13, "A:EDIT B:ERASE");
-    draw_text(0, 14, "UD PICK A OK B BACK");
-    draw_text(1, 16, "HINT LOCKS THE CELL");
+    draw_text(1, 11, "------------------");
+    draw_centered(13, "A EDIT B ERASE");
+    draw_centered(14, "UP DOWN PICK A OK");
+    draw_centered(15, "B BACKS OUT");
 }
 
 /* Draw the win screen content. */
@@ -461,8 +494,10 @@ void ui_pause(uint8_t choice, uint8_t level)
 /* Pause navigation: move the `>` marker (LCD stays on, no reload). */
 void ui_pause_cursor(uint8_t old_choice, uint8_t new_choice)
 {
-    map_tile(5, (uint8_t)(6 + old_choice), (uint8_t)(' ' - 32));
-    map_tile(5, (uint8_t)(6 + new_choice), (uint8_t)('>' - 32));
+    map_tile((uint8_t)(PAUSE_ITEM_X[old_choice] - 2),
+             (uint8_t)(6 + old_choice), (uint8_t)(' ' - 32));
+    map_tile((uint8_t)(PAUSE_ITEM_X[new_choice] - 2),
+             (uint8_t)(6 + new_choice), (uint8_t)('>' - 32));
 }
 
 /* Win screen: level clear + mistake tally (no passwords anymore). */
