@@ -34,12 +34,22 @@
 extern const uint8_t GRID_TILES[230 * 16];
 extern const uint8_t CURSOR_TILE_DATA[4 * 16];
 
-/* Load the prebuilt grid + cursor tiles into VRAM (fast copy).
- * Call on every game screen entry (menus overwrite them with the font). */
-void tiles_load_grid(void);
+/* Resident VRAM layout (loaded once by ui_init, never reloaded):
+ * 0x8000-0x8E5F  grid tiles 0-229 (game screens, unsigned BG addressing)
+ * 0x8F00-0x8F3F  cursor sprite tiles 240-243 (sprites always unsigned)
+ * 0x9000-0x95FF  font tiles 0-95 (menus, signed BG addressing),
+ *                  placed there by GBDK font_load in signed text mode.
+ * Only the grid + cursor are copied by us (to 0x8000); the font is
+ * never touched after loading. */
+#define FONT_TILE_COUNT 96
 
-/* Reload the GBDK font as the BG tileset. Call on every menu entry. */
-void tiles_load_font(void);
+/* Boot/init LCDC mode: unsigned tile data (so font_load lands the font
+ * at 0x8000 tiles 0-95), map 0x9800, sprites on, background on, LCDC.7
+ * clear. Written while the LCD is stopped. */
+#define LCDC_OFF_MODE 0x13
+
+/* Load every tile pattern once. Call with the display off (ui_init). */
+void tiles_load_resident(void);
 
 /* Fill `out[4]` with the TL/TR/BL/BR tile indices for a cell value
  * (0 = empty, 1-9 = digit; `is_user` picks the gray shade) at grid

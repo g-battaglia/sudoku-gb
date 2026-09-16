@@ -60,6 +60,8 @@ static void test_board_load(void)
         assert(board_get(i) == expected);
         assert(board_is_original(i) == (expected != 0));
         assert(board_is_locked(i) == (expected != 0));
+        /* Fresh load, no hints yet: locked means original and only that. */
+        assert(board_is_locked(i) == board_is_original(i));
     }
     printf("board_load OK\n");
 }

@@ -50,12 +50,14 @@ make clean
 
 ## LCD safety (real hardware)
 
-The DMG LCD can be damaged by stopping it outside VBlank, so every
-GAME<->MENU switch goes through one helper: GBDK `display_off()`
-(waits for VBlank), full redraw while off, `DISPLAY_ON` once at the
-end. Plain navigation never touches the LCD (menu cursor and game
-cursor redraw only what changed). Menus use no stdio: text is written
-as font tiles through the VRAM-safe `set_bkg_*` calls.
+The DMG LCD can be damaged by stopping it outside VBlank, so the LCD
+is stopped exactly once (boot init). Tile patterns are resident
+(grid at `0x8000`, font at `0x9000`, cursor sprites), and every full
+screen is drawn into the hidden background map while the LCD keeps
+showing the old one; one LCDC write then swaps map + tile mode +
+sprites at frame start. No white flash, no half-drawn frame, no stale
+sprites. Small updates (menu marker, cells, cursor) write straight to
+the visible screen. Menus use no stdio: text is written as font tiles.
 
 ## Files
 
@@ -67,3 +69,4 @@ as font tiles through the VRAM-safe `set_bkg_*` calls.
   `tools/gen_tiles.py` — deterministic generators.
 - `tools/smoke_pyboy.py` — headless emulator smoke test.
 - `tests/test_host.c` — gcc tests. `PLAN.md` — full plan.
+- `DEVELOPMENT.md` — codebase guide (start here if C is new to you).

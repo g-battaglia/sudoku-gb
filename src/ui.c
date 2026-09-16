@@ -1,5 +1,4 @@
 #include <gbdk/platform.h>
-#include <gbdk/font.h>
 
 #include "ui.h"
 #include "board.h"
@@ -9,36 +8,49 @@
 /* ---------------------------------------------------------------------------
  * ui.c — Fullscreen grid + text menus. One screen per function.
  *
- * The game screen is only tiles: each cell is 2x2 BG tiles drawn with
- * set_bkg_tiles at (GRID_X + col*2, GRID_Y + row*2), plus the frame
- * margins at columns 0 and 19. The cursor is 4 sprites (a 16x16
- * outline) moved with move_sprite: sprite coords need +8/+16 offset
+ * The game screen is only tiles: each cell is 2x2 BG tiles drawn at
+ * (GRID_X + col*2, GRID_Y + row*2), plus the frame margins at columns
+ * 0 and 19. The cursor is 4 sprites (a 16x16 outline) moved with
+ * move_sprite: sprite coords need +8/+16 offset
  * (DEVICE_SPRITE_PX_OFFSET_X/Y).
  *
  * TEXT WITHOUT STDIO: menus never use printf/gotoxy/cls (GBDK varargs
  * plus console state caused garbled screens). Every character is
  * written as a font tile (ASCII c = tile c - 32) through the VRAM-safe
- * set_bkg_* family, which works with the LCD on or off.
+ * map_* helpers below.
  *
- * LCD SAFETY (real DMG hardware): clearing LCDC bit 7 outside VBlank
- * can damage the LCD, so every GAME<->MENU switch goes through
- * screen_begin()/screen_end(): GBDK display_off() (waits for VBlank)
- * first, full tile + map redraw while off, DISPLAY_ON last. Plain
- * navigation never touches the LCD: menus redraw only the cells that
- * changed (ui_select_cursor/ui_select_page/ui_pause_cursor) and the
- * game cursor is sprite-only.
+ * ATOMIC SCREENS (no LCD-off flash, no stale sprites): tile patterns
+ * are resident (loaded once at boot, see tiles.h), and the DMG has two
+ * background maps. Every full screen is drawn into the HIDDEN map
+ * while the LCD keeps showing the old one, then one LCDC write swaps
+ * the map (+ tile mode + OBJ enable) at the next frame start:
+ * - draw_hidden = 1 routes map_* to the hidden map (GBDK set_tiles /
+ *   set_vram_byte, both WAIT_STAT-guarded, so LCD-on writes are safe);
+ * - draw_hidden = 0 routes map_* to the visible map (delta updates:
+ *   menu markers, page rows, single cells — always LCD-on);
+ * - screen_present() does vsync() (the VBlank ISR copies the prepared
+ *   shadow OAM) and flips the visible map in a single LCDC write, so
+ *   the new map and the new sprites appear on the same frame.
+ * Protocol: begin_draw() -> draw content -> prepare shadow OAM
+ * (cursor_place for game, cursor_sprites_off for menus) ->
+ * screen_present(). The LCD is stopped exactly once, in ui_init().
  * -------------------------------------------------------------------------*/
 
-/* LCDC mode we always run in: LCD on, tiles at 0x8000, map at 0x9800,
- * sprites 8x8 on, background on. Written once at boot; transitions
- * only toggle the LCD bit through display_off()/DISPLAY_ON. */
-#define LCDC_MODE 0x93
+/* LCD on, tiles at 0x8000, map selected by present, sprites 8x8 on,
+ * background on (game screens). */
+#define LCDC_GAME 0x93
 
-/* Same mode with the LCD bit clear (used while a transition redraws). */
-#define LCDC_OFF_MODE 0x13
+/* LCD on, tiles at 0x9000 (signed: font), map selected by present,
+ * sprites off, background on (menus). OBJ-off hides any stale OAM
+ * even if a park were missed. */
+#define LCDC_MENU 0x81
 
 /* Blank map tile: font tile 0 (ASCII space). */
 #define FONT_BLANK 0
+
+/* The two DMG background maps (window stays off, so 0x9C00 is free). */
+#define MAP_9800 ((uint8_t *)0x9800)
+#define MAP_9C00 ((uint8_t *)0x9C00)
 
 /* One map row of the grid: 9 cells x 2 tiles wide, 2 tile rows. */
 static uint8_t grid_map_row[9 * 2 * 2];
@@ -52,23 +64,72 @@ static uint8_t cell_tiles[4];
 /* Scratch tile indices for one line of text (max one screen row). */
 static uint8_t text_tiles[SCREEN_COLS];
 
-/* Begin an atomic screen transition (GAME<->MENU): stop the LCD the
- * ONLY hardware-safe way, then set the mode bits with the LCD bit
- * kept clear. Never call nested or from an ISR; the VBlank interrupt
- * must stay enabled (the main loop never disables it). */
-static void screen_begin(void)
+/* 1 = the visible map is 0x9C00 (else 0x9800). Flipped by present. */
+static uint8_t shown_9c00;
+
+/* 1 = map_* writes go to the hidden map (full redraw in progress). */
+static uint8_t draw_hidden;
+
+/* Base address of the map that is NOT shown right now. */
+static uint8_t *hidden_base(void)
 {
-    if (LCDC_REG & LCDCF_ON) {
-        display_off();
-    }
-    LCDC_REG = LCDC_OFF_MODE;
+    return shown_9c00 ? MAP_9800 : MAP_9C00;
 }
 
-/* End a transition: the new screen is fully drawn, turn the LCD on.
- * Re-enabling is safe at any time (the first frame stays blank). */
-static void screen_end(void)
+/* Write a tile rectangle (routes hidden/visible, always VRAM-safe). */
+static void map_tiles(uint8_t x, uint8_t y, uint8_t w, uint8_t h,
+                      const uint8_t *tiles)
 {
-    DISPLAY_ON;
+    if (draw_hidden) {
+        set_tiles(x, y, w, h, hidden_base(), tiles);
+    } else {
+        set_bkg_tiles(x, y, w, h, tiles);
+    }
+}
+
+/* Write one tile (routes hidden/visible, always VRAM-safe). */
+static void map_tile(uint8_t x, uint8_t y, uint8_t t)
+{
+    if (draw_hidden) {
+        set_vram_byte(hidden_base() + (uint16_t)((uint16_t)y * 32 + x), t);
+    } else {
+        set_bkg_tile_xy(x, y, t);
+    }
+}
+
+/* Fill the 20x18 viewport (all SCX/SCY = 0 ever shows). Only used for
+ * full redraws (draw_hidden = 1). */
+static void map_fill_view(uint8_t t)
+{
+    uint8_t x, y;
+
+    for (y = 0; y < SCREEN_ROWS; y++) {
+        for (x = 0; x < SCREEN_COLS; x++) {
+            map_tile(x, y, t);
+        }
+    }
+}
+
+/* Start a full redraw into the hidden map (LCD keeps showing old). */
+static void begin_draw(void)
+{
+    draw_hidden = 1;
+}
+
+/* Show the hidden map: wait for VBlank (shadow OAM is copied there),
+ * then swap map + tile mode + OBJ enable in one LCDC write. The new
+ * map and the new sprites land on the same frame. `mode` is LCDC_GAME
+ * or LCDC_MENU (both keep the LCD bit set: it never clears again). */
+static void screen_present(uint8_t mode)
+{
+    draw_hidden = 0;
+    vsync();
+    if (shown_9c00) {
+        LCDC_REG = (uint8_t)(mode & (uint8_t)~LCDCF_BG9C00);
+    } else {
+        LCDC_REG = (uint8_t)(mode | LCDCF_BG9C00);
+    }
+    shown_9c00 = (uint8_t)(!shown_9c00);
 }
 
 /* Draw a NUL-terminated string at map (x, y). Clipped to the row end.
@@ -83,7 +144,7 @@ static void draw_text(uint8_t x, uint8_t y, const char *s)
         n++;
     }
     if (n > 0) {
-        set_bkg_tiles(x, y, n, 1, text_tiles);
+        map_tiles(x, y, n, 1, text_tiles);
     }
 }
 
@@ -94,7 +155,7 @@ static uint8_t draw_dec3(uint8_t x, uint8_t y, uint8_t n)
     text_tiles[0] = (uint8_t)('0' + (uint8_t)(n / 100) - 32);
     text_tiles[1] = (uint8_t)('0' + (uint8_t)((n / 10) % 10) - 32);
     text_tiles[2] = (uint8_t)('0' + (uint8_t)(n % 10) - 32);
-    set_bkg_tiles(x, y, 3, 1, text_tiles);
+    map_tiles(x, y, 3, 1, text_tiles);
     return 3;
 }
 
@@ -104,7 +165,7 @@ static uint8_t draw_num2(uint8_t x, uint8_t y, uint8_t n)
 {
     text_tiles[0] = (uint8_t)((n >= 10 ? '0' + (uint8_t)(n / 10) : ' ') - 32);
     text_tiles[1] = (uint8_t)('0' + (uint8_t)(n % 10) - 32);
-    set_bkg_tiles(x, y, 2, 1, text_tiles);
+    map_tiles(x, y, 2, 1, text_tiles);
     return 2;
 }
 
@@ -124,7 +185,7 @@ static uint8_t draw_num(uint8_t x, uint8_t y, uint8_t n)
     }
     text_tiles[w] = (uint8_t)('0' + (uint8_t)(n % 10) - 32);
     w++;
-    set_bkg_tiles(x, y, w, 1, text_tiles);
+    map_tiles(x, y, w, 1, text_tiles);
     return w;
 }
 
@@ -155,7 +216,7 @@ static void select_draw_row(uint8_t page, uint8_t i, uint8_t row,
     }
     text_tiles[12] = (uint8_t)(' ' - 32);
     text_tiles[13] = (uint8_t)((done[n] ? '*' : ' ') - 32);
-    set_bkg_tiles(3, (uint8_t)(3 + i), 14, 1, text_tiles);
+    map_tiles(3, (uint8_t)(3 + i), 14, 1, text_tiles);
 }
 
 /* Draw the PAGE line (fixed width, column 6 row 2). */
@@ -164,57 +225,6 @@ static void select_draw_page(uint8_t page)
     draw_text(6, 2, "PAGE ");
     draw_num2(11, 2, (uint8_t)(page + 1));
     draw_text(13, 2, "/10");
-}
-
-/* Draw grid row `row` (2 tile rows) into the background map. */
-static void draw_grid_row(uint8_t row)
-{
-    uint8_t c, idx;
-
-    for (c = 0; c < GRID_SIZE; c++) {
-        idx = (uint8_t)(row * GRID_SIZE + c);
-        grid_cell_tiles(board_get(idx), !board_is_original(idx), row, c,
-                        cell_tiles);
-        grid_map_row[c * 2] = cell_tiles[0];
-        grid_map_row[c * 2 + 1] = cell_tiles[1];
-        grid_map_row[18 + c * 2] = cell_tiles[2];
-        grid_map_row[18 + c * 2 + 1] = cell_tiles[3];
-    }
-    set_bkg_tiles(GRID_X, (uint8_t)(GRID_Y + row * 2), 18, 2, grid_map_row);
-}
-
-/* Move the 4 cursor sprites over grid cell (row, col). Sprite-only:
- * safe at any time (shadow OAM is copied during VBlank). */
-static void cursor_place(uint8_t row, uint8_t col)
-{
-    uint8_t x, y;
-
-    x = (uint8_t)(DEVICE_SPRITE_PX_OFFSET_X + (GRID_X + col * 2) * 8);
-    y = (uint8_t)(DEVICE_SPRITE_PX_OFFSET_Y + (GRID_Y + row * 2) * 8);
-    move_sprite((uint8_t)(CURSOR_SPRITE_ID + 0), x, y);
-    move_sprite((uint8_t)(CURSOR_SPRITE_ID + 1), (uint8_t)(x + 8), y);
-    move_sprite((uint8_t)(CURSOR_SPRITE_ID + 2), x, (uint8_t)(y + 8));
-    move_sprite((uint8_t)(CURSOR_SPRITE_ID + 3), (uint8_t)(x + 8), (uint8_t)(y + 8));
-}
-
-/* Park the 4 cursor sprites off-screen (shadow OAM only, always safe). */
-static void cursor_sprites_off(void)
-{
-    uint8_t i;
-
-    for (i = 0; i < 4; i++) {
-        move_sprite((uint8_t)(CURSOR_SPRITE_ID + i), 0, 0);
-    }
-}
-
-/* Full menu entry: font tiles + blank screen, LCD stays off until the
- * caller finishes drawing and calls screen_end(). */
-static void menu_begin(void)
-{
-    screen_begin();
-    tiles_load_font();
-    fill_bkg_rect(0, 0, SCREEN_COLS, SCREEN_ROWS, FONT_BLANK);
-    cursor_sprites_off();
 }
 
 /* Count empty cells (for the START menu "LEFT" line). */
@@ -245,29 +255,12 @@ static uint8_t count_done(const uint8_t *done)
     return n;
 }
 
-/* Init font + LCDC + cursor sprites. Call once at startup. */
-void ui_init(void)
-{
-    uint8_t i;
-
-    screen_begin();
-    tiles_load_font();
-    fill_bkg_rect(0, 0, SCREEN_COLS, SCREEN_ROWS, FONT_BLANK);
-    for (i = 0; i < 4; i++) {
-        set_sprite_tile((uint8_t)(CURSOR_SPRITE_ID + i),
-                        (uint8_t)(CURSOR_SPRITE_TILE + i));
-    }
-    cursor_sprites_off();
-    /* Sprite tiles never change again: menus only use BG tiles, the
-     * grid loader refreshes sprite tiles on every game entry. */
-}
-
-/* Level select: 10 levels per page + completion marks. */
-void ui_select(uint8_t page, uint8_t row, const uint8_t *done)
+/* Draw the select screen content (works hidden or visible). */
+static void draw_select_content(uint8_t page, uint8_t row,
+                                const uint8_t *done)
 {
     uint8_t i, x;
 
-    menu_begin();
     draw_text(4, 1, "SELECT LEVEL");
     select_draw_page(page);
     for (i = 0; i < LEVELS_PER_PAGE; i++) {
@@ -280,56 +273,50 @@ void ui_select(uint8_t page, uint8_t row, const uint8_t *done)
     draw_text(x, 16, "/");
     x++;
     draw_num(x, 16, LEVEL_COUNT);
-    screen_end();
 }
 
-/* Select navigation: move the `>` marker (LCD stays on, no reload). */
-void ui_select_cursor(uint8_t old_row, uint8_t new_row)
+/* Draw grid row `row` (2 tile rows) into the map. */
+static void draw_grid_row(uint8_t row)
 {
-    set_bkg_tile_xy(3, (uint8_t)(3 + old_row), (uint8_t)(' ' - 32));
-    set_bkg_tile_xy(3, (uint8_t)(3 + new_row), (uint8_t)('>' - 32));
-}
+    uint8_t c, idx;
 
-/* Select page change: page line + rows only (LCD stays on, no reload). */
-void ui_select_page(uint8_t page, uint8_t row, const uint8_t *done)
-{
-    uint8_t i;
-
-    select_draw_page(page);
-    for (i = 0; i < LEVELS_PER_PAGE; i++) {
-        select_draw_row(page, i, row, done);
+    for (c = 0; c < GRID_SIZE; c++) {
+        idx = (uint8_t)(row * GRID_SIZE + c);
+        grid_cell_tiles(board_get(idx), !board_is_original(idx), row, c,
+                        cell_tiles);
+        grid_map_row[c * 2] = cell_tiles[0];
+        grid_map_row[c * 2 + 1] = cell_tiles[1];
+        grid_map_row[18 + c * 2] = cell_tiles[2];
+        grid_map_row[18 + c * 2 + 1] = cell_tiles[3];
     }
+    map_tiles(GRID_X, (uint8_t)(GRID_Y + row * 2), 18, 2, grid_map_row);
 }
 
-/* Game screen: grid tiles + frame margins. No text at all. The rows
+/* Draw the game screen content: frame margins + grid rows. The rows
  * cover the whole viewport, so no clear is needed. */
-void ui_game_full(void)
+static void draw_game_content(void)
 {
     uint8_t r, i;
 
-    screen_begin();
-    tiles_load_grid();
     for (i = 0; i < SCREEN_ROWS; i++) {
         margin_col[i] = MARGIN_LEFT_TILE;
     }
-    set_bkg_tiles(0, 0, 1, SCREEN_ROWS, margin_col);
+    map_tiles(0, 0, 1, SCREEN_ROWS, margin_col);
     for (i = 0; i < SCREEN_ROWS; i++) {
         margin_col[i] = MARGIN_RIGHT_TILE;
     }
-    set_bkg_tiles((uint8_t)(SCREEN_COLS - 1), 0, 1, SCREEN_ROWS, margin_col);
+    map_tiles((uint8_t)(SCREEN_COLS - 1), 0, 1, SCREEN_ROWS, margin_col);
     for (r = 0; r < GRID_SIZE; r++) {
         draw_grid_row(r);
     }
-    screen_end();
 }
 
-/* START menu: status + RESUME/HINT/RESTART/TITLE + help. */
-void ui_pause(uint8_t choice, uint8_t level)
+/* Draw the START menu content (status + items + help). */
+static void draw_pause_content(uint8_t choice, uint8_t level)
 {
     uint8_t i, x;
     static const char *ITEMS[4] = {"RESUME", "HINT", "RESTART", "TITLE"};
 
-    menu_begin();
     draw_text(1, 1, "L");
     x = 2;
     x += draw_dec3(x, 1, (uint8_t)(level + 1));
@@ -347,28 +334,19 @@ void ui_pause(uint8_t choice, uint8_t level)
     draw_num(x, 2, count_empty());
     draw_text(2, 4, "------------------");
     for (i = 0; i < 4; i++) {
-        set_bkg_tile_xy(5, (uint8_t)(6 + i),
-                        (uint8_t)((choice == i ? '>' : ' ') - 32));
+        map_tile(5, (uint8_t)(6 + i),
+                 (uint8_t)((choice == i ? '>' : ' ') - 32));
         draw_text(7, (uint8_t)(6 + i), ITEMS[i]);
     }
     draw_text(2, 11, "------------------");
     draw_text(2, 13, "A:EDIT B:ERASE");
     draw_text(0, 14, "UD PICK A OK B BACK");
     draw_text(1, 16, "HINT LOCKS THE CELL");
-    screen_end();
 }
 
-/* Pause navigation: move the `>` marker (LCD stays on, no reload). */
-void ui_pause_cursor(uint8_t old_choice, uint8_t new_choice)
+/* Draw the win screen content. */
+static void draw_win_content(uint8_t level, uint8_t is_last)
 {
-    set_bkg_tile_xy(5, (uint8_t)(6 + old_choice), (uint8_t)(' ' - 32));
-    set_bkg_tile_xy(5, (uint8_t)(6 + new_choice), (uint8_t)('>' - 32));
-}
-
-/* Win screen: level clear + mistake tally (no passwords anymore). */
-void ui_win(uint8_t level, uint8_t is_last)
-{
-    menu_begin();
     draw_text(2, 2, "LEVEL ");
     draw_dec3(8, 2, (uint8_t)(level + 1));
     draw_text(11, 2, " CLEAR!");
@@ -382,7 +360,119 @@ void ui_win(uint8_t level, uint8_t is_last)
     }
     draw_text(2, 15, "------------------");
     draw_text(4, 16, "A CONTINUE");
-    screen_end();
+}
+
+/* Move the 4 cursor sprites over grid cell (row, col). Sprite-only:
+ * safe at any time (shadow OAM is copied during VBlank). */
+static void cursor_place(uint8_t row, uint8_t col)
+{
+    uint8_t x, y;
+
+    x = (uint8_t)(DEVICE_SPRITE_PX_OFFSET_X + (GRID_X + col * 2) * 8);
+    y = (uint8_t)(DEVICE_SPRITE_PX_OFFSET_Y + (GRID_Y + row * 2) * 8);
+    move_sprite((uint8_t)(CURSOR_SPRITE_ID + 0), x, y);
+    move_sprite((uint8_t)(CURSOR_SPRITE_ID + 1), (uint8_t)(x + 8), y);
+    move_sprite((uint8_t)(CURSOR_SPRITE_ID + 2), x, (uint8_t)(y + 8));
+    move_sprite((uint8_t)(CURSOR_SPRITE_ID + 3), (uint8_t)(x + 8), (uint8_t)(y + 8));
+}
+
+/* Park the 4 cursor sprites off-screen (shadow OAM only, always safe). */
+static void cursor_sprites_off(void)
+{
+    uint8_t i;
+
+    for (i = 0; i < 4; i++) {
+        move_sprite((uint8_t)(CURSOR_SPRITE_ID + i), 0, 0);
+    }
+}
+
+/* Init all video state once. Stops the LCD, loads every tile pattern
+ * (tiles_load_resident stops it a second time: GBDK font_load
+ * re-enables it on exit), parks all sprites and copies that to
+ * hardware OAM. The LCD stays off: the first screen (ui_select from
+ * main) presents it. Call once at startup. */
+void ui_init(void)
+{
+    uint8_t i;
+
+    display_off();
+    LCDC_REG = LCDC_OFF_MODE;
+    SCX_REG = 0;
+    SCY_REG = 0;
+    tiles_load_resident();
+    for (i = 0; i < 4; i++) {
+        set_sprite_tile((uint8_t)(CURSOR_SPRITE_ID + i),
+                        (uint8_t)(CURSOR_SPRITE_TILE + i));
+    }
+    for (i = 0; i < MAX_HARDWARE_SPRITES; i++) {
+        move_sprite(i, 0, 0);
+    }
+    refresh_OAM();
+}
+
+/* Level select: 10 levels per page + completion marks. */
+void ui_select(uint8_t page, uint8_t row, const uint8_t *done)
+{
+    begin_draw();
+    map_fill_view(FONT_BLANK);
+    draw_select_content(page, row, done);
+    cursor_sprites_off();
+    screen_present(LCDC_MENU);
+}
+
+/* Select navigation: move the `>` marker (LCD stays on, no reload). */
+void ui_select_cursor(uint8_t old_row, uint8_t new_row)
+{
+    map_tile(3, (uint8_t)(3 + old_row), (uint8_t)(' ' - 32));
+    map_tile(3, (uint8_t)(3 + new_row), (uint8_t)('>' - 32));
+}
+
+/* Select page change: page line + rows only (LCD stays on, no reload). */
+void ui_select_page(uint8_t page, uint8_t row, const uint8_t *done)
+{
+    uint8_t i;
+
+    select_draw_page(page);
+    for (i = 0; i < LEVELS_PER_PAGE; i++) {
+        select_draw_row(page, i, row, done);
+    }
+}
+
+/* Game screen: grid + margins, cursor placed by us (no caller can show
+ * a game frame before its OAM is ready). No text at all. */
+void ui_game_full(uint8_t row, uint8_t col)
+{
+    begin_draw();
+    draw_game_content();
+    cursor_place(row, col);
+    screen_present(LCDC_GAME);
+}
+
+/* START menu: status + RESUME/HINT/RESTART/TITLE + help. */
+void ui_pause(uint8_t choice, uint8_t level)
+{
+    begin_draw();
+    map_fill_view(FONT_BLANK);
+    draw_pause_content(choice, level);
+    cursor_sprites_off();
+    screen_present(LCDC_MENU);
+}
+
+/* Pause navigation: move the `>` marker (LCD stays on, no reload). */
+void ui_pause_cursor(uint8_t old_choice, uint8_t new_choice)
+{
+    map_tile(5, (uint8_t)(6 + old_choice), (uint8_t)(' ' - 32));
+    map_tile(5, (uint8_t)(6 + new_choice), (uint8_t)('>' - 32));
+}
+
+/* Win screen: level clear + mistake tally (no passwords anymore). */
+void ui_win(uint8_t level, uint8_t is_last)
+{
+    begin_draw();
+    map_fill_view(FONT_BLANK);
+    draw_win_content(level, is_last);
+    cursor_sprites_off();
+    screen_present(LCDC_MENU);
 }
 
 /* Redraw one cell (2x2 tiles) from the board state.
@@ -394,8 +484,8 @@ void ui_cell(uint8_t row, uint8_t col)
     idx = (uint8_t)(row * GRID_SIZE + col);
     grid_cell_tiles(board_get(idx), !board_is_original(idx), row, col,
                     cell_tiles);
-    set_bkg_tiles((uint8_t)(GRID_X + col * 2), (uint8_t)(GRID_Y + row * 2),
-                  2, 2, cell_tiles);
+    map_tiles((uint8_t)(GRID_X + col * 2), (uint8_t)(GRID_Y + row * 2),
+              2, 2, cell_tiles);
 }
 
 /* Draw (`show` = 1, gray user digit) or erase (`show` = 0) the picked
@@ -404,8 +494,8 @@ void ui_preview(uint8_t row, uint8_t col, uint8_t value, uint8_t show)
 {
     if (show) {
         grid_cell_tiles(value, 1, row, col, cell_tiles);
-        set_bkg_tiles((uint8_t)(GRID_X + col * 2), (uint8_t)(GRID_Y + row * 2),
-                      2, 2, cell_tiles);
+        map_tiles((uint8_t)(GRID_X + col * 2), (uint8_t)(GRID_Y + row * 2),
+                  2, 2, cell_tiles);
     } else {
         ui_cell(row, col);
     }

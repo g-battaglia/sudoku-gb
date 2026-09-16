@@ -8,12 +8,13 @@
 /* Working grid: 81 values 0-9, index = row * 9 + column. */
 static uint8_t cells[CELL_COUNT];
 
-/* Original clues: 1 = fixed puzzle digit (black, never editable). */
-static uint8_t given[CELL_COUNT];
-
-/* Hint reveals: 1 = digit placed by HINT (gray like a player digit,
- * but locked like a clue). */
-static uint8_t hinted[CELL_COUNT];
+/* One origin per cell (single source of truth for shade + lock):
+ * PLAYER = player digit (gray, editable), GIVEN = original clue
+ * (black, locked), HINT = revealed by HINT (gray, locked). */
+#define ORIGIN_PLAYER 0
+#define ORIGIN_GIVEN 1
+#define ORIGIN_HINT 2
+static uint8_t origin[CELL_COUNT];
 
 /* Mistakes made in the current game. */
 static uint8_t error_count;
@@ -33,8 +34,7 @@ void board_load(uint8_t level)
     givens = puzzles[level].givens;
     for (i = 0; i < CELL_COUNT; i++) {
         cells[i] = (uint8_t)(givens[i] - '0');
-        given[i] = (uint8_t)(givens[i] != '0');
-        hinted[i] = 0;
+        origin[i] = (givens[i] != '0') ? ORIGIN_GIVEN : ORIGIN_PLAYER;
     }
     error_count = 0;
 }
@@ -48,14 +48,14 @@ uint8_t board_get(uint8_t idx)
 /* Return 1 if cell `idx` is an original clue (black, never editable). */
 uint8_t board_is_original(uint8_t idx)
 {
-    return given[idx];
+    return (uint8_t)(origin[idx] == ORIGIN_GIVEN);
 }
 
 /* Return 1 if cell `idx` is not editable (clue or hint), 0 if the
  * player may change it. */
 uint8_t board_is_locked(uint8_t idx)
 {
-    return (uint8_t)(given[idx] || hinted[idx]);
+    return (uint8_t)(origin[idx] != ORIGIN_PLAYER);
 }
 
 /* Write `value` (0-9) into cell `idx`, unchecked. */
@@ -134,5 +134,5 @@ void board_add_mistake(void)
  * gray like a player digit, but the cell stays locked like a clue. */
 void board_reveal(uint8_t idx)
 {
-    hinted[idx] = 1;
+    origin[idx] = ORIGIN_HINT;
 }

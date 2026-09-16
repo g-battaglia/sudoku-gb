@@ -21,7 +21,7 @@ ROM = build/$(PROJECT).gb
 CSOURCES = src/board.c src/input.c src/main.c src/puzzles.c src/puzzles_gen.c src/tiles.c src/tiles_gen.c src/ui.c
 
 # -msm83:gb = Game Boy target. -Wm-yn = ROM title. -Wl-yt0x00 = ROM ONLY.
-LCCFLAGS = -msm83:gb -Wm-yn"SUDOKU"
+LCCFLAGS = -msm83:gb -Wm-yn"SUDOKU" -Wl-yt0x00
 
 all: $(ROM)
 

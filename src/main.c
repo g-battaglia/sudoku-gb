@@ -28,11 +28,18 @@
 
 /* Game states. */
 typedef enum {
-    ST_TITLE,
+    ST_SELECT,
     ST_GAME,
     ST_PAUSE,
     ST_WIN
 } State;
+
+/* START menu items (matches the ui_pause item order). */
+#define MENU_RESUME 0
+#define MENU_HINT 1
+#define MENU_RESTART 2
+#define MENU_TITLE 3
+#define MENU_COUNT 4
 
 /* Current state. */
 static State state;
@@ -127,6 +134,12 @@ static void locked_feedback(void)
     flash = 20;
 }
 
+/* Wrap v + d into 0..n-1 (menu / select navigation). */
+static uint8_t wrap_add(uint8_t v, int8_t d, uint8_t n)
+{
+    return (uint8_t)((v + n + d) % n);
+}
+
 /* Start (or restart) a level: reset board, cursor, mode. */
 static void start_level(uint8_t new_level)
 {
@@ -151,19 +164,17 @@ static void start_level(uint8_t new_level)
         }
     }
     preview_forget();
-    ui_game_full();
-    ui_cursor(cursor_row, cursor_col);
+    ui_game_full(cursor_row, cursor_col);
     state = ST_GAME;
 }
 
-/* Back to the game screen (menu cleared it): redraw grid + cursor. */
+/* Back to the game screen: redraw grid + cursor in one atomic swap. */
 static void resume_game(void)
 {
     editing = 0;
     flash = 0;
     preview_forget();
-    ui_game_full();
-    ui_cursor(cursor_row, cursor_col);
+    ui_game_full(cursor_row, cursor_col);
     state = ST_GAME;
 }
 
@@ -219,6 +230,7 @@ static void confirm_editing(void)
         /* Illegal move: restore, count a mistake, keep picking. */
         board_set(idx, old);
         ui_cell(cursor_row, cursor_col);
+        preview_forget(); /* The redraw killed any visible preview. */
         board_add_mistake();
         ui_cursor_hide();
         flash = 24;
@@ -261,20 +273,24 @@ static void erase_cell(void)
 /* Level-select handler: Up/Down = row, Left/Right = page, A = play. */
 static void select_update(void)
 {
+    uint8_t next;
+
     if (input_pressed(J_UP)) {
-        ui_select_cursor(sel_row, (uint8_t)((sel_row + LEVELS_PER_PAGE - 1) % LEVELS_PER_PAGE));
-        sel_row = (uint8_t)((sel_row + LEVELS_PER_PAGE - 1) % LEVELS_PER_PAGE);
+        next = wrap_add(sel_row, -1, LEVELS_PER_PAGE);
+        ui_select_cursor(sel_row, next);
+        sel_row = next;
     }
     if (input_pressed(J_DOWN)) {
-        ui_select_cursor(sel_row, (uint8_t)((sel_row + 1) % LEVELS_PER_PAGE));
-        sel_row = (uint8_t)((sel_row + 1) % LEVELS_PER_PAGE);
+        next = wrap_add(sel_row, 1, LEVELS_PER_PAGE);
+        ui_select_cursor(sel_row, next);
+        sel_row = next;
     }
     if (input_pressed(J_LEFT)) {
-        sel_page = (uint8_t)((sel_page + SELECT_PAGE_COUNT - 1) % SELECT_PAGE_COUNT);
+        sel_page = wrap_add(sel_page, -1, SELECT_PAGE_COUNT);
         ui_select_page(sel_page, sel_row, completed);
     }
     if (input_pressed(J_RIGHT)) {
-        sel_page = (uint8_t)((sel_page + 1) % SELECT_PAGE_COUNT);
+        sel_page = wrap_add(sel_page, 1, SELECT_PAGE_COUNT);
         ui_select_page(sel_page, sel_row, completed);
     }
     if (input_pressed(J_A) || input_pressed(J_START)) {
@@ -355,39 +371,41 @@ static void do_hint(void)
     board_set(idx, value);
     board_reveal(idx);
     if (board_is_solved()) {
-        /* Won by hint: no need to redraw the grid first. */
         win_now();
         return;
     }
-    resume_game();
-    ui_cell(cursor_row, cursor_col);
+    resume_game(); /* Full redraw already shows the revealed digit. */
 }
 
 /* Pause (START menu) handler: RESUME / HINT / RESTART / TITLE. */
 static void pause_update(void)
 {
+    uint8_t next;
+
     if (input_pressed(J_UP)) {
-        ui_pause_cursor(menu_choice, (uint8_t)((menu_choice + 3) % 4));
-        menu_choice = (uint8_t)((menu_choice + 3) % 4);
+        next = wrap_add(menu_choice, -1, MENU_COUNT);
+        ui_pause_cursor(menu_choice, next);
+        menu_choice = next;
     }
     if (input_pressed(J_DOWN)) {
-        ui_pause_cursor(menu_choice, (uint8_t)((menu_choice + 1) % 4));
-        menu_choice = (uint8_t)((menu_choice + 1) % 4);
+        next = wrap_add(menu_choice, 1, MENU_COUNT);
+        ui_pause_cursor(menu_choice, next);
+        menu_choice = next;
     }
     if (input_pressed(J_B) || input_pressed(J_START)) {
         resume_game();
         return;
     }
     if (input_pressed(J_A)) {
-        if (menu_choice == 0) {
+        if (menu_choice == MENU_RESUME) {
             resume_game();
-        } else if (menu_choice == 1) {
+        } else if (menu_choice == MENU_HINT) {
             do_hint();
-        } else if (menu_choice == 2) {
+        } else if (menu_choice == MENU_RESTART) {
             start_level(level);
         } else {
             ui_select(sel_page, sel_row, completed);
-            state = ST_TITLE;
+            state = ST_SELECT;
         }
     }
 }
@@ -400,7 +418,7 @@ static void win_update(void)
             start_level((uint8_t)(level + 1));
         } else {
             ui_select(sel_page, sel_row, completed);
-            state = ST_TITLE;
+            state = ST_SELECT;
         }
     }
 }
@@ -421,12 +439,12 @@ void main(void)
     menu_choice = 0;
     preview_forget();
     ui_select(sel_page, sel_row, completed);
-    state = ST_TITLE;
+    state = ST_SELECT;
 
     while (1) {
         input_poll();
         switch (state) {
-        case ST_TITLE:
+        case ST_SELECT:
             select_update();
             break;
         case ST_GAME:

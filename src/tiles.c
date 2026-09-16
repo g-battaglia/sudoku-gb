@@ -59,17 +59,33 @@ static uint8_t content_of(uint8_t value, uint8_t is_user)
     return value;
 }
 
-/* Load the prebuilt grid + cursor tiles into VRAM (fast copy).
- * NOTE: hand-rolled copy, not set_bkg_data: GBDK's routine silently
+/* Load every tile pattern once (see tiles.h for the layout).
+ * 1. GBDK font_init/font_load decompress the font to 0x9000 tiles 0-95
+ *    (font_init forces signed text mode, so the loader's LCDC-bit-4
+ *    check picks the 0x9000 base; first font claims tiles from 0).
+ *    Leave it there: menus read it in signed mode. Never copy it.
+ * 2. Copy the prebuilt grid to 0x8000 + the cursor sprite tiles.
+ * NOTE: hand-rolled copies, not set_bkg_data: GBDK's routine silently
  * drops the low tile range on big loads (tiles 0-114 came out zero
  * no matter the split or order), while a plain loop just works.
- * Call with the display off (ui_game_full does that). */
-void tiles_load_grid(void)
+ * WARNING: font_load() re-enables the LCD on exit (GBDK font.s forces
+ * LCDC on). The raw copies below have no WAIT_STAT, so a dropped byte
+ * in PPU mode 3 would corrupt tiles on strict timing (real DMG, mGBA)
+ * while passing on lenient emulators. Stop the LCD a second time
+ * first: after this point it stays off until ui_init ends. Call with
+ * the display off (ui_init does that). */
+void tiles_load_resident(void)
 {
+    font_t ibm_font;
     uint8_t *dst;
     const uint8_t *src;
     uint16_t left;
 
+    font_init();
+    ibm_font = font_load(font_ibm);
+    font_set(ibm_font);
+    display_off();
+    LCDC_REG = LCDC_OFF_MODE;
     dst = (uint8_t *)0x8000;
     src = GRID_TILES;
     left = (uint16_t)(TILE_COUNT * 16);
@@ -80,16 +96,6 @@ void tiles_load_grid(void)
         left--;
     }
     set_sprite_data(CURSOR_SPRITE_TILE, 4, CURSOR_TILE_DATA);
-}
-
-/* Reload the GBDK font as the BG tileset (for text menus). */
-void tiles_load_font(void)
-{
-    font_t ibm_font;
-
-    font_init();
-    ibm_font = font_load(font_ibm);
-    font_set(ibm_font);
 }
 
 /* Fill `out[4]` with the TL/TR/BL/BR tile indices for a cell value

@@ -4,25 +4,27 @@
 /* ---------------------------------------------------------------------------
  * ui.h — All screen drawing.
  *
- * Two layers, switched atomically (the game owns ALL BG tiles):
- * - GAME (custom tiles from tiles.h): a fullscreen 9x9 grid of 16x16 px
- *   cells at tile (GRID_X, GRID_Y) = (1, 0), i.e. 144x144 px = the whole
- *   screen height, with the outer frame in the side margins.
- *   No header, no footer, no messages: the board IS the screen.
- *   Everything else (level, mistakes, help) lives in the START menu.
- * - MENUS (GBDK font, reloaded on every menu entry): level select
- *   (100 levels, 10 per page), START menu, win screen.
+ * Two resident layers (tile patterns loaded once at boot, see tiles.h):
+ * - GAME: a fullscreen 9x9 grid of 16x16 px cells at tile (GRID_X,
+ *   GRID_Y) = (1, 0), i.e. 144x144 px = the whole screen height, with
+ *   the outer frame in the side margins. No header, no footer, no
+ *   messages: the board IS the screen. Everything else (level,
+ *   mistakes, help) lives in the START menu.
+ * - MENUS: GBDK font at 0x9000: level select (100 levels, 10 per
+ *   page), START menu, win screen.
  *
- * Two hardware rules (learned from garbled-screenshot bugs):
- * - Never depend on boot state: transitions set the LCDC mode bits
- *   explicitly while the LCD is off.
- * - The LCD is stopped ONLY through GBDK display_off() (VBlank-safe):
- *   clearing LCDC.7 outside VBlank can damage a real DMG. Switches
- *   redraw everything while off, then turn it back on once. Plain
- *   navigation (cursor markers, game cursor) never touches the LCD.
+ * Atomic screens: the DMG has two background maps, so every full
+ * screen is drawn into the HIDDEN map while the LCD keeps showing the
+ * old one, then one LCDC write swaps map + tile mode + OBJ enable at
+ * the next frame start (after the VBlank ISR copied the prepared
+ * shadow OAM). No white flash, no half-drawn frame, no stale sprites.
+ * The LCD is stopped exactly once, in ui_init() via GBDK display_off()
+ * (VBlank-safe: clearing LCDC.7 outside VBlank can damage a real DMG).
+ * Plain navigation (cursor markers, game cursor) only touches the
+ * visible map or shadow OAM.
  *
  * Menus use no stdio at all: text is written as font tiles through
- * the VRAM-safe set_bkg_* calls (ASCII c = tile c - 32).
+ * the VRAM-safe map helpers (ASCII c = tile c - 32).
  *
  * Feedback without text: the picked digit blinks gray in the cursor cell
  * (ui_preview); a rejected digit blinks the cursor off briefly (main.c
@@ -42,7 +44,8 @@
 /* Select pages (LEVEL_COUNT / LEVELS_PER_PAGE). */
 #define SELECT_PAGE_COUNT (LEVEL_COUNT / LEVELS_PER_PAGE)
 
-/* Init font + LCDC + cursor sprites. Call once at startup. */
+/* Init all video state once (tiles, maps, sprites). The LCD stays off:
+ * the first screen (ui_select from main) presents it. */
 void ui_init(void);
 
 /* --- Screens (each hides the cursor and draws everything) --- */
@@ -56,8 +59,9 @@ void ui_select(uint8_t page, uint8_t row, const uint8_t *done);
 void ui_select_cursor(uint8_t old_row, uint8_t new_row);
 void ui_select_page(uint8_t page, uint8_t row, const uint8_t *done);
 
-/* Game screen: fullscreen grid + margins. No text at all. */
-void ui_game_full(void);
+/* Game screen: fullscreen grid + margins, cursor placed by us (no caller
+ * can show a game frame before its OAM is ready). No text at all. */
+void ui_game_full(uint8_t row, uint8_t col);
 
 /* START menu. `choice` 0 = RESUME, 1 = HINT, 2 = RESTART, 3 = TITLE.
  * Shows level, mistake count and empty cells left. */

@@ -1,9 +1,9 @@
 # COMPACT.md — Sudoku GB: state of work and next steps
 
 > Snapshot for resuming work. 100 levels, no passwords, precomputed
-> tiles, LCD-safe transitions. Build is green AND headless-verified
-> with PyBoy (`make test-emulator`: 26 checks pass). All text/code in
-> English.
+> tiles, double-buffered atomic screens. Build is green AND
+> headless-verified with PyBoy (`make test-emulator`: 90+ checks pass,
+> every transition frame-checked). All text/code in English.
 
 ---
 
@@ -54,7 +54,8 @@ real usage ~27.8KB (~4.9KB slack). Both generators deterministic
 
 ```text
 README.md      build, controls, rules, LCD safety, file list
-PLAN.md        full plan (password sections marked [HISTORIC])
+DEVELOPMENT.md codebase guide for C beginners (start there if new)
+PLAN.md        full plan
 Makefile       GBDK build + setup-gbdk + test-emulator
 
 src/
@@ -62,15 +63,15 @@ src/
   puzzles.h      Puzzle { Difficulty, givens[82], solution[82] } + table
   puzzles_gen.c  GENERATED: 100 givens + solutions (do not edit)
   puzzles.c      difficulty_name()
-  board.h/.c     cells[81] + given[81] + hinted[81] + mistakes (tally only)
+  board.h/.c     cells[81] + origin[81] + mistakes (tally only)
   input.h/.c     joypad edge detection + D-Pad auto-repeat
-  tiles.h/.c     grid indexing + VRAM copy (artwork in tiles_gen.c)
+  tiles.h/.c     resident VRAM layout + one-time copy (art in tiles_gen.c)
   tiles_gen.c    GENERATED: 230 grid + 4 cursor tiles (do not edit)
-  ui.h/.c        tile-drawn text menus + grid screens + transitions
+  ui.h/.c        hidden-map draws + atomic present + delta updates
   main.c         SELECT -> GAME <-> PAUSE -> WIN
 tools/gen_puzzles.py  full grid + dig with uniqueness check (cap 2)
 tools/gen_tiles.py    precomputed 16x16 artwork (19 contents x variants)
-tools/smoke_pyboy.py  headless checks (no display needed)
+tools/smoke_pyboy.py  per-frame transition checks (no display needed)
 tests/test_host.c     gcc tests (no GBDK includes) for logic modules
 ```
 
@@ -99,33 +100,35 @@ Clean-code invariants (keep them):
   it (GBDK `set_bkg_data` silently drops tiles 0-114 on big loads).
 - Deterministic: regen twice = identical file.
 
-### 4.2 LCD safety (real DMG hardware)
+### 4.2 LCD safety + atomic screens (real DMG hardware)
 
 - Clearing LCDC.7 outside VBlank can damage the LCD (Pan Docs). The
-  ONLY LCD-off path is `screen_begin()`: GBDK `display_off()` (waits
-  for VBlank) + mode bits with LCD bit kept clear. `screen_end()` does
-  `DISPLAY_ON` once (re-enabling is always safe).
-- Static audit: one `LCDC_REG` write (0x13, LCD already off), no direct
-  1->0 clear, no SHOW_/HIDE_ toggling, no custom ISRs, VBlank always
-  enabled, raw VRAM copy only with LCD off. LCD-on updates use GBDK
-  STAT-safe calls (`set_bkg_*`, `fill_bkg_rect`) + shadow OAM.
-- Menu entry costs ~15 frames (font decompress, LCD off = invisible);
-  navigation is instant (see 4.3).
+  ONLY `display_off()` is in `ui_init()` (waits for VBlank, boot init).
+  After that the LCD bit is never cleared: every screen is drawn into
+  the HIDDEN bg map (`set_tiles`/`set_vram_byte`, both WAIT_STAT
+  guarded per GBDK source, so LCD-on writes are safe), then one LCDC
+  write swaps map + tile mode + OBJ enable right after `vsync()`.
+- Shadow OAM is always prepared BEFORE presenting (cursor placed for
+  game, parked + OBJ-off for menus), so map and sprites land on the
+  same frame: no white flash, no mixed frame, no stale cursor.
+- Static audit: LCDC written only in init (0x13, off) and in present
+  (0x81/0x89 menu, 0x93/0x9B game — bit 7 always set); no custom
+  ISRs; VBlank always enabled; raw VRAM copies only with LCD off.
 
-### 4.3 Delta menu redraws (no arrow flash)
+### 4.3 Delta updates (no arrow flash)
 
-- `ui_select` / `ui_pause` draw fully once (LCD off). Up/Down only move
-  the `>` marker (`ui_select_cursor` / `ui_pause_cursor`: 2 tile
-  writes, LCD on). Page change redraws page line + 10 rows only.
+- Full screens draw once into the hidden map. Up/Down only move the
+  `>` marker (`ui_select_cursor` / `ui_pause_cursor`: 2 tile writes to
+  the visible map). Page change redraws page line + 10 rows only.
 - Game cursor is sprite-only; the background map never changes on move.
 - Edit-mode digit blink is intentional (tiles only, board untouched).
 
 ### 4.4 Cell origins (hint shading)
 
-- `board_is_original()` = clue (black, never editable).
-- `board_is_locked()` = clue OR hint (not editable: no edit/erase).
-- Player digits and hints render gray (`!board_is_original`);
-  erase only clears unlocked player digits.
+- One `origin[81]` array: PLAYER (gray, editable), GIVEN (black,
+  locked), HINT (gray, locked). Saves 81 WRAM bytes vs two arrays.
+- `board_is_original()` = GIVEN; `board_is_locked()` = not PLAYER.
+- Erase only clears unlocked player digits.
 
 ### 4.5 Levels, select, hint, win
 
@@ -148,14 +151,15 @@ Clean-code invariants (keep them):
 make clean && make          # expect: exit 0, zero warnings
 make check                  # expect: Size OK, logo OK, cart 0x0
 make test-host              # expect: ALL HOST TESTS PASSED
-make test-emulator          # expect: SMOKE PASSED (26 checks)
+make test-emulator          # expect: SMOKE PASSED (90+ checks)
 make run                    # visual check by the user (has display)
 ```
 
-Smoke test covers: boot/select text, select+pause arrows never blank
-and never toggle LCDC.7, page tiles intact, grid+margins on entry,
-sprite-only cursor, blink show/erase, gray+locked hint, readable win,
-advance to next level.
+Smoke test covers: boot/select text + menu mode + parked OAM,
+select+pause arrows (no blank, LCDC value stable), every full-screen
+transition frame-by-frame (LCDC.7 always set, old-or-new only, output
+stable, OAM + tile/OBJ mode match the new screen), sprite-only cursor,
+blink show/erase, gray locked hint, readable win, advance.
 
 ---
 

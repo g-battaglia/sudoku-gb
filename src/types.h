@@ -6,8 +6,8 @@
  *
  * Target: Game Boy Classic (DMG, no color).
  * The background is a 32x32 tile map; the screen shows 20x18 8x8-pixel
- * tiles. We only use the GBDK built-in font (font_init / printf / gotoxy),
- * so no external graphic assets are needed.
+ * tiles. Text is drawn as font tiles (no stdio), the grid from
+ * precomputed tiles: no external graphic assets are needed.
  * -------------------------------------------------------------------------*/
 
 #include <stdint.h>
@@ -18,7 +18,7 @@
 #define BOX_SIZE 3     /* 3x3 boxes. */
 
 /* --- Levels ----------------------------------------------------------------- */
-#define LEVEL_COUNT 100 /* 34 EASY + 33 MEDIUM + 33 HARD. */
+#define LEVEL_COUNT 100 /* 10 intro + 24 EASY + 33 MEDIUM + 33 HARD. */
 
 /* --- Screen ----------------------------------------------------------------- */
 #define SCREEN_COLS 20 /* GBDK font is 8x8: 160/8 = 20 columns. */
