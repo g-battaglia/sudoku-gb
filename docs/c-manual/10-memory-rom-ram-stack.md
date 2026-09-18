@@ -7,7 +7,7 @@ Python has "memory". C has address spaces, each with its own size, lifetime, rul
 | Memory | Size (GB) | Lives | Holds in this game | Written? |
 |--------|-----------|-------|--------------------|----------|
 | Stack | ~hundreds of bytes (inside WRAM) | one function call | locals, parameters, return addresses | constantly |
-| WRAM (work RAM) | 8 KB | whole session (cleared on boot/reset) | `cells[81]`, `origin[81]`, `marks[38]`, `slot`, cursor, state | freely |
+| WRAM (work RAM) | 8 KB | whole session (cleared on boot/reset) | `cells[81]`, `cell_origin[81]`, `marks[38]`, `slot`, cursor, state | freely |
 | ROM (cartridge) | 32 KB total | forever (factory-pressed) | code + `puzzles[300]` (15.6 KB) + tile art + font | never at runtime |
 | SRAM (battery RAM) | 8 KB at `0xA000` | years (battery) | one `SaveSlot` (~0xD2 = 210 bytes) | via MBC latch only |
 | VRAM / OAM | 8 KB video + 160 B sprites | per frame | tile patterns, two 32×32 maps, 40 sprites | via GBDK helpers / shadow OAM |
@@ -46,27 +46,28 @@ Rules with teeth on small machines:
 ## 3. WRAM: `static` state that survives frames
 
 ```c
-/* src/board.c:9 — the live game, 81 + 81 + 1 bytes, zeroed at boot */
+/* src/board.c — the live game, 81 + 81 + 1 bytes, zeroed at boot */
 static uint8_t cells[CELL_COUNT];
-static uint8_t origin[CELL_COUNT];
+static uint8_t cell_origin[CELL_COUNT];
 static uint8_t error_count;
 
-/* src/main.c — session state: state, level, cursor, editing, marks[38], slot, ... */
+/* src/main.c — session state (grouped): state, level, Cursor, Preview,
+ * Pending, marks[38], slot, ... */
 static State state;
 static uint16_t level;
 static uint8_t marks[MARKS_BYTES];   /* 38 bytes, one bit per level */
 static SaveSlot slot;                /* ~210-byte working copy of the save */
 ```
 
-`static` storage is allocated once at boot (and zero-initialised — the code relies on `marks` starting cleared, `state` starting `ST_DIFF == 0`) and lives until power-off or soft reset (`jp 0x0100` clears RAM like a power cycle while SRAM survives — that asymmetry *is* the save feature, §5).
+`static` storage is allocated once at boot (and zero-initialised) and lives until power-off or soft reset (`jp 0x0100` clears RAM like a power cycle while SRAM survives — that asymmetry *is* the save feature, §5). Boot additionally calls `marks_clear(marks)` plus explicit field resets rather than relying on zero-init alone.
 
 Why not locals in `main` passed everywhere? Threading 10+ state variables through every handler signature would obscure the logic for no benefit on a single-threaded game. File-`static` state with small handler functions is the pragmatic C equivalent of a Python object's `self.*` attributes — with the linker enforcing the privacy (`static` = this file only, chapter 05 §4).
 
 ## 4. ROM: `const` data baked into the cartridge
 
 ```c
-extern const Puzzle puzzles[LEVEL_COUNT];   /* puzzles.h:46 — lives in ROM */
-static const uint8_t MAGIC[4] = {'S','U','D','K'};  /* save.c:40 — ROM literal */
+extern const Puzzle puzzles[LEVEL_COUNT];   /* puzzles.h — lives in ROM */
+static const uint8_t MAGIC[4] = {'S','U','D','K'};  /* save.c — ROM literal */
 ```
 
 `const` at file scope (plus string literals like `"EASY"`, `"?????"`) goes into ROM: readable, never writable. Writing through a `const`-stripped pointer is undefined behaviour — on hardware, a bus write to ROM that silently does nothing (or worse). The `const` in `const uint8_t *marks` / `const char *s` is the compiler enforcing "read-only" at every call site, including refusing to pass ROM data to `marks_set`'s mutable `uint8_t *` (which would be a hardware fault).
@@ -85,7 +86,7 @@ DISABLE_RAM;   /* close it: stray writes cannot corrupt the save */
 
 Every `save_*` function opens, works, and closes around the access — so a crash mid-frame cannot silently scribble on the slot through a stale mapping. Forgetting `DISABLE_RAM` leaves the save exposed to every stray pointer write thereafter; the open-work-close discipline makes the window explicit and minimal. The pointer itself is a cast integer (`#define SRAM ((uint8_t *)0xA000)`, chapter 06 §3 use 2): address `0xA000` treated as byte array.
 
-The on-wire layout is fixed offsets (`src/save.c:13`), completely independent of the compiler's struct layout (chapter 07 §1 padding discussion):
+The on-wire layout is fixed offsets (`src/save_format.h: SAVE_OFF_*`), completely independent of the compiler's struct layout (chapter 07 §1 padding discussion). The checksum (`save_checksum`) and field validation (`save_fields_valid`) are hardware-free and host-tested; `src/save.c` only moves bytes through the latch:
 
 ```text
 0x00 'S''U''D''K' magic   0x59 origins[81]
@@ -95,20 +96,21 @@ The on-wire layout is fixed offsets (`src/save.c:13`), completely independent of
 0x08 values[81]           0xD2 end (210 bytes used of 8192)
 ```
 
-Field I/O is byte-explicit (`sram_read`/`sram_write` loops; level split into low/high bytes §6). Three guards, three failure modes handled:
+Field I/O is byte-explicit (`sram_read`/`sram_write` loops; level split into low/high bytes §6). Four guards, four failure modes handled:
 
 1. **Magic `SUDK`** — first boot SRAM is garbage; wrong magic ⇒ no save, boot menu hides LOAD.
-2. **Version `0x01`** — future formats will not be misread as current ones (bump on any layout change, old saves cleanly ignored).
+2. **Version `0x01`** (`SAVE_VERSION`) — future formats will not be misread as current ones (bump on any layout change, old saves cleanly ignored).
 3. **Checksum** (8-bit sum of all preceding bytes, wrapping — the *wanted* overflow from chapter 03 §8) — dead battery / wrong cartridge / half-written slot ⇒ mismatch ⇒ ignored.
+4. **Field ranges** (`save_fields_valid`: level < 300, active 0/1, digits 0-9, origins 0-2) — a checksum-passing foreign slot still cannot jump outside the level table.
 
-`sram_valid` checks all three with SRAM enabled; `save_present`/`save_read` wrap it in open/close; `save_write` recomputes the checksum *last*, over the bytes just written. `save_store(1)` on SAVE writes `game_active = 1` (resumable); every win rewrites with `game_active = 0` (`marks_set` first) so completions persist even without explicit save. Boot does `has_save = save_read(&slot)` once; LOAD re-reads SRAM to see the latest save; `board_restore()` copies values + origins + mistakes back — same layout in RAM and SRAM, zero conversion, PC-testable (`tests/test_host.c:224` round-trips it without any hardware).
+`sram_valid` checks magic + version + checksum with SRAM enabled; `save_read` additionally validates ranges and rejects garbage; `save_present`/`save_read` wrap everything in open/close; `save_write` recomputes the checksum *last*, over the bytes just written (re-read from SRAM, so it covers what landed). `save_store(1)` on SAVE writes `game_active = 1` (resumable); every win rewrites with `game_active = 0` (`marks_set` first) so completions persist even without explicit save. Boot does `has_save = save_read(&slot)` once; LOAD re-reads SRAM to see the latest save; `board_restore()` copies values + origins + mistakes back — same layout in RAM and SRAM, zero conversion, PC-testable (`tests/test_host.c` round-trips it without any hardware, plus a layout + validation test).
 
 > **Python vs C:** Python `pickle.dump(obj, open("save.dat","wb"))` handles format, versioning and errors opaquely — and opaquely breaks across versions. Here every byte offset, the checksum loop and the latch discipline are handwritten and commented — because on hardware there is no filesystem, no exceptions, and a dead battery must degrade to "LOAD hidden", never to a crash. The explicitness *is* the robustness.
 
 ## 6. Endianness: why the level is two bytes, low first
 
 ```c
-slot->level = (uint16_t)(SRAM[OFF_LEVEL_LO] | (SRAM[OFF_LEVEL_HI] << 8));
+slot->level = (uint16_t)(SRAM[SAVE_OFF_LEVEL_LO] | (SRAM[SAVE_OFF_LEVEL_HI] << 8));
 /* ... and on write: */
 lo = (uint8_t)(slot->level & 0xFF);
 hi = (uint8_t)(slot->level >> 8);

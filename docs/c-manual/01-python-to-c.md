@@ -126,7 +126,7 @@ Python allocates lists, strings and objects and frees them automatically.
 C gives you these places to put data (full details in chapter 10), and **nothing is freed unless you say so**:
 
 - **Local variables** (on the *stack*): created when a function runs, gone when it returns. Like Python locals, but the memory is raw bytes, not objects.
-- **`static` / global variables**: live forever in RAM. The game's grid (`static uint8_t cells[81]` in `src/board.c:9`) is exactly this: 81 bytes that exist for the whole session.
+- **`static` / global variables**: live forever in RAM. The game's grid (`static uint8_t cells[81]` in `src/board.c:14`) is exactly this: 81 bytes that exist for the whole session.
 - **`const` data**: lives in ROM (read-only). The 300 puzzles (`const Puzzle puzzles[300]`) are baked into the cartridge and can never change.
 - **Heap** (`malloc`/`free`): Python's `list.append` equivalent. **This project never uses it** (chapter 10 explains why: on the Game Boy it wastes precious RAM and risks fragmentation; fixed-size arrays are simpler and provable).
 
@@ -145,10 +145,10 @@ What Python gives you for free, C makes you write (or avoid):
 | `in` (`x in row`) | hand loop with early `return 1;` (see `board_conflicts`) |
 | `str` methods | raw `char` arrays + manual loops (menus draw font tiles, never `print`) |
 | `True`/`False` | `1`/`0` (C has `_Bool`/`bool`, but this codebase uses `uint8_t` for Game Boy reasons) |
-| `None` | `NULL` for pointers, `0xFF` as "no cell" sentinel (see `pv_row = 0xFF` in `main.c`) |
+| `None` | `NULL` for pointers, `PV_NONE` (`0xFF`) as "no cell" sentinel (see `pv.row = PV_NONE` in `main.c`) |
 | `len(x)` | a separate `#define COUNT` you maintain by hand |
 
-Example — error handling without exceptions (`src/main.c:326`):
+Example — error handling without exceptions (`src/main.c:372`):
 
 ```c
 static void apply_load(void) {

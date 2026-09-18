@@ -10,9 +10,9 @@
 > Language: **everything in English (docs, code, comments, UI strings).**
 >
 > NOTE (2026-09-16): the password system was removed entirely. There are
-> now 100 free levels (10 intro EASY + 24 EASY + 33 MEDIUM + 33 HARD),
-> precomputed grid tiles, gray player/hint digits and double-buffered
-> atomic screen swaps (LCD stopped once at boot).
+> now 300 free levels (100 EASY incl. 10 intro at 48 givens + 100 MEDIUM
+> + 100 HARD), precomputed grid tiles, gray player/hint digits and
+> double-buffered atomic screen swaps (LCD stopped once at boot).
 
 ---
 
@@ -21,8 +21,8 @@
 A complete, playable Sudoku game for real DMG hardware and emulators
 (primary: mGBA):
 
-- 100 free levels: 10 introductory EASY (48 givens) + 24 EASY (42)
-  + 33 MEDIUM (34) + 33 HARD (29), all playable from boot.
+- 300 free levels: 100 EASY (10 introductory at 48 givens + 90 at 42)
+  + 100 MEDIUM (34) + 100 HARD (29), all playable from boot.
 - 9x9 fullscreen grid, D-Pad navigation, A = digit-pick mode, erase.
 - No game over: mistakes are only tallied, play goes on forever.
 - HINT (START menu) reveals a cell digit, renders it gray like a player
@@ -78,14 +78,15 @@ src/
   puzzles_gen.c          [GENERATED] 300 puzzles + solutions (gen_puzzles.py)
   board.h / board.c      [DONE] state + rules (origins, hint locks, marks)
   input.h / input.c      [DONE] joypad debounce (pressed + repeat)
-  save.h / save.c        [DONE] battery save slot (SRAM + checksum)
+  save.h / save.c        [DONE] battery save slot (SRAM I/O)
+  save_format.h/.c       [DONE] save layout + checksum + validation (no HW)
   tiles.h / tiles.c      [DONE] precomputed 16x16 grid + cursor tiles
   tiles_gen.c            [GENERATED] 230 grid + 4 cursor tiles (gen_tiles.py)
   ui.h / ui.c            [DONE] grid screens + tile-drawn text menus
   main.c                 [DONE] state loop + edit-mode + save flow
 tools/
   gbdk/                  [DONE] vendored toolchain (gitignored, setup-gbdk)
-  gen_puzzles.py         [DONE] generator, 100 unique verified puzzles
+  gen_puzzles.py         [DONE] generator, 300 unique verified puzzles
   gen_tiles.py           [DONE] precomputed grid artwork generator
   smoke_pyboy.py         [DONE] headless emulator smoke test
 build/                   .gb/.ihx/.map output (gitignored)
@@ -97,12 +98,14 @@ build/                   .gb/.ihx/.map output (gitignored)
 |---|---|---|
 | `types.h` | Global `#define` only. | No |
 | `puzzles` | Level data + difficulty names. | No (ROM) |
-| `board` | `cells[81]`, `given[81]`, `hinted[81]`, load/get/locked/original/conflicts/is_solved/errors/reveal. No game over: mistakes tallied only. | No |
-| `input` | Reads `joypad()`, exposes edge `pressed` + D-Pad auto-repeat. | Yes (GBDK) |
+| `board` | `cells[81]`, `cell_origin[81]`, load/get/locked/original/conflicts/is_solved/errors/reveal + marks bitmap. No game over: mistakes tallied only. | No |
+| `input` | Reads `joypad()`, exposes edge `pressed` + D-Pad auto-repeat (16-bit timer). | Yes (GBDK) |
+| `save_format` | Image layout + checksum + field validation. | No |
+| `save` | SRAM I/O through the MBC latch (uses `save_format`). | Yes (GBDK) |
 | `ui` | All drawing: tile text helpers, grid, screens; atomic LCD-safe transitions; delta menu redraws. | Yes (GBDK) |
 | `main` | State machine + flow, no direct drawing (calls ui_*). | Via ui/input |
 
-Clean-code rule: `board/puzzles` **never include `<gb/gb.h>`**,
+Clean-code rule: `board/puzzles/save_format` **never include `<gb/gb.h>`**,
 so they compile and run on PC with `gcc` (`make test-host`).
 
 ### 3.3 Puzzle format
@@ -186,7 +189,7 @@ on every level entry; win = `board_is_solved()` after each confirmed A
 - `void input_poll_init(void)` — clear state.
 - `void input_poll(void)` — call `joypad()`, compute
   `pressed = now & ~prev` (edge), plus D-Pad auto-repeat
-  after ~20 frames at ~6 frames rate.
+  after 18 frames every 6 frames (16-bit hold timer, never stalls).
 - `uint8_t input_pressed(uint8_t mask)` — edge for A/B/START/SELECT.
 - `uint8_t input_dir(uint8_t mask)` — repeat-aware, for cursor movement.
 - Why: no double-count while held; smooth held movement.
@@ -195,13 +198,14 @@ on every level entry; win = `board_is_solved()` after each confirmed A
 
 - `ui_init()` — LCD off once, resident tiles, parked sprites (LCD stays
   off until the first screen presents it).
-- `ui_diff(choice)` (EASY/MEDIUM/HARD), `ui_select(page, row, done,
-  diff)` (100 levels of one mode, 10/page, `*`),
-  `ui_game_full(row, col)` (grid + placed cursor, no text),
+- `ui_diff(choice, has_load)` (EASY/MEDIUM/HARD + LOAD),
+  `ui_select(page, row, marks, diff)` (100 levels of one mode, 10/page,
+  `*`), `ui_game_full(row, col)` (grid + placed cursor, no text),
   `ui_cell(r,c)` (one 2x2 cell), `ui_preview(r,c,v,show)` (blink without
   touching the board), `ui_cursor(r,c)` (4-sprite outline),
-  `ui_pause(choice, level)` (status + RESUME/HINT/RESTART/TITLE + help),
-  `ui_win(...)`. Delta helpers for marker/cell updates (LCD stays on).
+  `ui_pause(choice, lid, diff, mistakes)` (status + 5 items + help),
+  `ui_win(num, is_last, mistakes)`. Delta helpers for marker/cell
+  updates (LCD stays on).
 - `tiles.c`: 16x16 cells (2x scaled digits, uniform 2px borders),
   230 grid tiles at 0-229 + font at 0x9000 (resident, never reloaded);
   cursor corners at 240-243.
@@ -211,12 +215,13 @@ on every level entry; win = `board_is_solved()` after each confirmed A
 - `void main(void)`: init, read battery save, start at `ST_DIFF`,
   one `switch(state)` loop with `vsync()`.
 - Small handlers: `diff_update()`, `select_update()`, `game_update()`
-  (navigation vs digit-pick mode), `pause_update()`
-  (RESUME/HINT/SAVE/PLAY AGAIN/MENU), `win_update()`,
-  `saved_update()` — one main switch.
-- State vars: `state, level, cursor_row/col, entry_value, editing,
-  marks[38], slot/has_save, menu_choice, sel_page/row, win info,
-  frame, flash, preview tracker`.
+  (split: `game_update_nav()` vs `game_update_editing()`),
+  `pause_update()` (RESUME/HINT/SAVE/PLAY AGAIN/MENU switch),
+  `win_update()`, `saved_update()` — one main switch.
+- State: `state, level/sel_diff, Cursor{row,col,entry,editing},
+  marks[38], slot/has_save, menu_choice, sel_page/row,
+  Pending{need_win/win_level/win_last/need_saved}, frame (16-bit),
+  flash, Preview{row,col,val,shown}`.
 - Mistakes via `board_errors()/board_add_mistake()` (counted only).
 - HINT via `board_reveal()` + `puzzles[level].solution` (locks the cell).
 
@@ -236,14 +241,14 @@ regen-puzzles / regen-tiles / setup-gbdk (fresh-clone bootstrap) / clean
 make                 # build/sudoku.gb (32KB ROM, MBC1 + battery SRAM)
 make run             # open in mGBA
 make check           # ihxcheck + size check + header check
-make test-host       # gcc tests on PC: board rules + solutions
+make test-host       # gcc tests on PC: board/marks/restore/save_format
 make test-emulator   # PyBoy: per-frame transition checks (no flash)
 make regen-puzzles   # regenerate src/puzzles_gen.c (only if needed)
 make clean
 ```
 
 Final check: boot in mGBA with no errors, header/Nintendo-logo OK,
-level select (100 free, `*` after win), edit-mode playthrough of level
+level select (300 free, `*` after win), edit-mode playthrough of level
 0 to win, HINT locks, no game over after many mistakes, cursor wrap,
 fullscreen grid with clean 2px lines, ROM <= 32768 bytes.
 

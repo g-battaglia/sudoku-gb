@@ -94,7 +94,7 @@ Cell origins are `#define`, not `enum`, deliberately (`src/board.h:35`):
 #define ORIGIN_HINT 2   /* gray, locked reveal */
 ```
 
-Why not an enum? The codes are stored in SRAM (81 bytes per save), so stability and width matter more than type nicety — and SDCC treats enums as `int` (2 bytes), doubling the storage for zero benefit. One `origin[81]` array encodes both shade and lock: `board_is_original = (origin == GIVEN)`, `board_is_locked = (origin != PLAYER)`. A single source of truth replaces two boolean arrays and saves 81 WRAM bytes (`COMPACT.md` §4.4). When the domain is "tiny codes stored in bulk", `#define` wins; when it is "states switched in logic", `enum` wins. The repo uses both, each where it fits.
+Why not an enum? The codes are stored in SRAM (81 bytes per save), so stability and width matter more than type nicety — and SDCC treats enums as `int` (2 bytes), doubling the storage for zero benefit. One `cell_origin[81]` array encodes both shade and lock: `board_is_original = (origin == GIVEN)`, `board_is_locked = (origin != PLAYER)`. A single source of truth replaces two boolean arrays and saves 81 WRAM bytes (`COMPACT.md` §4.4). When the domain is "tiny codes stored in bulk", `#define` wins; when it is "states switched in logic", `enum` wins. The repo uses both, each where it fits.
 
 ## 3. Bits: the six operators, fluently
 
@@ -118,7 +118,7 @@ The four bit idioms (memorise all four — they cover nearly every flag/bitmap i
 /* TOGGLE bit k:*/  byte ^= (1u << k);
 ```
 
-Repo sightings of each: TEST in `marks_get` and `puzzle_given` (mask check); SET in `marks_set`; CLEAR in cursor-sprite parking logic (bits cleared to hide); TOGGLE in the blink phase (`phase = (frame >> 5) & 1` tests bit 5 of the frame counter — the whole preview blink is one TEST idiom on a free-running counter, `src/main.c:136`).
+Repo sightings of each: TEST in `marks_get` and `puzzle_given` (mask check); SET in `marks_set`; CLEAR in cursor-sprite parking logic (bits cleared to hide); TOGGLE in the blink phase (`phase = (frame >> BLINK_SHIFT) & 1` tests bit 5 of the 16-bit frame counter — the whole preview blink is one TEST idiom on a free-running counter, `src/main.c:149`).
 
 Three worked idioms from the codebase:
 
@@ -131,7 +131,7 @@ bm[level >> 3] |= (uint8_t)(1u << (level & 7));          /* set */
 
 `>> 3` selects the byte (`/8`), `& 7` the position inside it (`%8`), `1u << k` builds a one-hot mask, `|=` sets the bit without touching neighbours. `tests/test_host.c:213` sets bits 7 and 8 (straddling bytes 0/1) and asserts neighbours 6 and 9 stay clear — the test that proves no leaking.
 
-**Idiom B — nibbles (half-bytes)** (`puzzle_solution`, `src/puzzles.c:9`):
+**Idiom B — nibbles (half-bytes)** (`puzzle_solution`, `src/puzzles.c:10`):
 
 ```c
 b = puzzles[level].solution[idx >> 1];  /* byte holds TWO digits */
@@ -156,7 +156,7 @@ just_pressed = (uint8_t)(now & (uint8_t)~prev_state);
 ```text
 0x0F = 0b00001111   low nibble mask (b & 0x0F keeps the low digit)
 0xF0 = 0b11110000   high nibble mask
-0xFF = 0b11111111   all 8 bits / sentinel "none" (pv_row = 0xFF)
+0xFF = 0b11111111   all 8 bits / sentinel "none" (PV_NONE = 0xFF)
 0xA000              SRAM address (addresses in hex, always)
 0x104               ROM logo offset (make check reads d[0x104:0x134])
 ```
@@ -173,7 +173,7 @@ Level data: `solution = {0x12, …}`, `givens_mask = {0b00000011, …}`.
 - Cell 1: same byte `0x12`, odd → `0x12 & 0x0F = 2`. Solution digit 2. Mask bit 1 → set → given 2.
 - Cell 2: mask bit 2 → clear → empty (`puzzle_given = 0`), solution still available for HINT via `puzzle_solution`.
 
-HINT (`main.c:471`) is exactly this machinery: read the hidden solution digit from ROM nibbles, `board_set` it, `board_reveal` (lock as `ORIGIN_HINT`), redraw. The solution was in ROM all along; the mask decides what the player sees at load.
+HINT (`do_hint` in `main.c`) is exactly this machinery: read the hidden solution digit from ROM nibbles, `board_set` it, `board_reveal` (lock as `ORIGIN_HINT`), redraw. The solution was in ROM all along; the mask decides what the player sees at load.
 
 Bit-fields (`struct { unsigned a:4, b:4; }`) exist in C for the same nibble job but are avoided here: their layout is implementation-defined (compiler chooses packing order), which would silently break the ROM format under a different SDCC version. Hand shifts are verbose and exact — portability over brevity, again.
 

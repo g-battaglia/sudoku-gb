@@ -5,7 +5,7 @@ C has five control-flow tools (`if`, `switch`, `for`, `while`, `do-while`) plus 
 ## 1. `if / else` and `else if`
 
 ```c
-uint8_t idx = (uint8_t)(cursor_row * GRID_SIZE + cursor_col);
+uint8_t idx = (uint8_t)(cursor.row * GRID_SIZE + cursor.col);
 if (board_is_locked(idx)) {
     locked_feedback();   /* clue or hint: complain */
 } else if (board_get(idx) != 0) {
@@ -27,11 +27,11 @@ if (locked)
 
 Common Python mistake: `=` vs `==`. `if (x = 5)` *assigns* 5 and is always true (with a warning). `if (x == 5)` compares. `-Wall` warns about the first inside `if` — read the warning, fix the operator. Yoda conditions (`if (5 == x)`) catch the typo at compile time but the repo does not use them; attention plus warnings suffice.
 
-`else if` chains test ranges and priorities (pause-menu dispatch in `pause_update` is an `if/else if` ladder on `menu_choice`). For many *exact values* of one variable, prefer `switch` (§2).
+`else if` chains test ranges and priorities. For many *exact values* of one variable, prefer `switch` (§2) — which is why the pause-menu dispatch in `pause_update` is a `switch` on `menu_choice`, not a ladder.
 
 ## 2. `switch`: one value, many branches
 
-`src/puzzles.c:33` maps a difficulty code to its name:
+`src/puzzles.c:35` maps a difficulty code to its name:
 
 ```c
 const char *difficulty_name(uint8_t diff) {
@@ -53,22 +53,22 @@ const char *difficulty_name(uint8_t diff) {
 Forgetting `break` when you *don't* return is the classic switch bug: execution "falls through" into the next case. Here `return` already left the function, so no `break` is needed — but in the main dispatch it is load-bearing:
 
 ```c
-switch (state) {   /* src/main.c:608 */
+switch (state) {   /* src/main.c:685 */
 case ST_DIFF:   diff_update();   break;
 case ST_SELECT: select_update(); break;
 case ST_GAME:   game_update();   break;
 case ST_PAUSE:  pause_update();  break;
 case ST_WIN:
-    if (need_win_draw) {
-        ui_win(win_level, win_last);
-        need_win_draw = 0;
+    if (pend.need_win) {
+        ui_win(pend.win_level, pend.win_last, board_errors());
+        pend.need_win = 0;
     }
     win_update();
     break;
 case ST_SAVED:
-    if (need_saved_draw) {
+    if (pend.need_saved) {
         ui_saved();
-        need_saved_draw = 0;
+        pend.need_saved = 0;
     }
     saved_update();
     break;
@@ -100,24 +100,24 @@ C has three loops; the repo uses the first two constantly, the third never (but 
 **`for`: counted loops** (grid scans, copies, checksums). Three clauses, all optional:
 
 ```c
-/* src/board.c:29 — reset the whole grid */
+/* src/board.c:32 — reset the whole grid */
 for (i = 0; i < CELL_COUNT; i++) {
     g = puzzle_given(level, i);
     cells[i] = g;
-    origin[i] = (g != 0) ? ORIGIN_GIVEN : ORIGIN_PLAYER;
+    cell_origin[i] = (g != 0) ? ORIGIN_GIVEN : ORIGIN_PLAYER;
 }
 ```
 
 Anatomy: `for (init; condition; step)`. `i = 0` once; repeat while `i < 81`; `i++` after each pass. Use `< COUNT`, never `<= COUNT - 1` — off-by-one errors hide in the second form, and `<` matches array bounds directly (valid indices are `0..80`). The comma form `for (r = 0, c = 0; …)` exists but the repo keeps one variable per loop and nests instead — readability over cleverness.
 
-Nested loops scan 2-D structure (`board_conflicts` box scan, `src/board.c:87`):
+Nested loops scan 2-D structure (the `board_conflicts` box scan precomputes the corner once — division is expensive on the LR35902, so it never sits in a loop guard):
 
 ```c
-/* Same 3x3 box: rows box_r..box_r+2, cols box_c..box_c+2 */
-for (r = (uint8_t)((row / BOX_SIZE) * BOX_SIZE);
-     r < (uint8_t)((row / BOX_SIZE) * BOX_SIZE + BOX_SIZE); r++) {
-    for (c = (uint8_t)((col / BOX_SIZE) * BOX_SIZE);
-         c < (uint8_t)((col / BOX_SIZE) * BOX_SIZE + BOX_SIZE); c++) {
+/* Same 3x3 box, corner computed once: rows box_row0..+2, cols box_col0..+2 */
+box_row0 = (uint8_t)((row / BOX_SIZE) * BOX_SIZE);
+box_col0 = (uint8_t)((col / BOX_SIZE) * BOX_SIZE);
+for (r = box_row0; r < (uint8_t)(box_row0 + BOX_SIZE); r++) {
+    for (c = box_col0; c < (uint8_t)(box_col0 + BOX_SIZE); c++) {
         if ((r != row || c != col) && cells[cell_index(r, c)] == value) {
             return 1;
         }
@@ -130,7 +130,7 @@ for (r = (uint8_t)((row / BOX_SIZE) * BOX_SIZE);
 **`while`: open-ended loops** (the main loop runs forever; scans stop on conditions):
 
 ```c
-/* src/main.c:603 — the game never returns from main */
+/* src/main.c — the game never returns from main */
 while (1) {
     input_poll();
     /* ... run one handler ... */
@@ -155,27 +155,27 @@ Note the trailing `;`. If you meet `do { … } while (0);` wrapping a multi-stat
 **`break` / `continue`:**
 
 ```c
-/* src/main.c:472 — find first free editable cell */
-idx = 0xFF;
+/* src/main.c (do_hint) — find first free editable cell */
+idx = PV_NONE;
 for (i = 0; i < CELL_COUNT; i++) {
     if (!board_is_locked(i) && board_get(i) == 0) {
         idx = i;
         break;          /* found: stop searching */
     }
 }
-if (idx == 0xFF) {
+if (idx == PV_NONE) {
     resume_game();      /* full grid: nothing to hint */
     return;
 }
 ```
 
-`break` leaves the innermost loop (or `switch`) now. `continue` skips to the next iteration (use sparingly; a guard clause usually reads better). `0xFF` (255) is a *sentinel*: cell indices only reach 80, so 255 unambiguously means "not found" (like Python's `None` for "no result"). Sentinels recur: `pv_row = 0xFF` ("no preview tracked"), `NULL` ("no address"), `default: return "?????"` ("no such difficulty").
+`break` leaves the innermost loop (or `switch`) now. `continue` skips to the next iteration (use sparingly; a guard clause usually reads better). `PV_NONE` (`0xFF`, 255) is a *sentinel*: cell indices only reach 80, so 255 unambiguously means "not found" (like Python's `None` for "no result"). Sentinels recur: `pv.row = PV_NONE` ("no preview tracked"), `NULL` ("no address"), `default: return "?????"` ("no such difficulty").
 
 `goto` exists in C and has one legitimate use (shared cleanup before many returns in large functions). This codebase never needs it: functions are short enough that early returns suffice. If a function grows `goto`-shaped, split it instead.
 
 ## 4. The wrap trick: modulo navigation
 
-Every menu and the cursor wrap around (`Up` from the top lands at the bottom). The helper (`src/main.c:152`):
+Every menu wraps around (`Up` from the top lands at the bottom). The helper (`src/main.c:167`):
 
 ```c
 static uint8_t wrap_add(uint8_t v, int8_t d, uint8_t n) {
@@ -187,14 +187,19 @@ Why `v + n + d` and not `v + d`? Because in C, **negative `%` stays negative** (
 
 > **Python vs C:** Python `-1 % 10 == 9`. C `-1 % 10 == -1`. When porting wrap logic from Python, always add the modulus first.
 
-Cursor movement uses the same idea inline (`src/main.c:246`):
+Cursor movement wraps too, but without `%`: the hot path uses two compares instead of division (`src/main.c:265` — `% 9` every cursor step costs cycles on the SM83):
 
 ```c
-cursor_row = (uint8_t)((cursor_row + GRID_SIZE + dr) % GRID_SIZE);
-cursor_col = (uint8_t)((cursor_col + GRID_SIZE + dc) % GRID_SIZE);
+r = (int8_t)(cursor.row + dr);
+if (r < 0) {
+    r += GRID_SIZE;
+} else if (r >= GRID_SIZE) {
+    r -= GRID_SIZE;
+}
+/* ... same for the column ... */
 ```
 
-Digit-pick wraps 1–9 rather than 0–8, so it shifts by one (`src/main.c:436`): `entry_value % 9 + 1` maps 9→1; `(entry_value + 7) % 9 + 1` maps 1→9 (`+7` ≡ `−2`… precisely: `(v+7)%9+1` with v=1 gives `(8)%9+1 = 9`). Same family, 1-based flavour.
+Digit-pick wraps 1–9 rather than 0–8, so it shifts by one (`game_update_editing`): `cursor.entry % 9 + 1` maps 9→1; `(cursor.entry + 7) % 9 + 1` maps 1→9 (`+7` ≡ `−2`… precisely: `(v+7)%9+1` with v=1 gives `(8)%9+1 = 9`). Same family, 1-based flavour. Menus keep `wrap_add` (cold path, clarity wins); the cursor hand-rolls it (hot path, cycles win) — optimise where it runs, not where it reads.
 
 ## 5. Early returns: guard clauses over nesting
 
@@ -214,27 +219,36 @@ void confirm_editing_nested(void) {
     }
 }
 
-/* Repo style: handle the odd case first, return, stay flat */
-static void confirm_editing(void) {   /* src/main.c:271 */
+/* Repo style: handle the odd case first, return, stay flat.
+ * try_place_digit() returns 1 = accepted, 0 = rejected. */
+static uint8_t try_place_digit(void) {   /* src/main.c:307 */
     uint8_t idx, old;
 
-    idx = (uint8_t)(cursor_row * GRID_SIZE + cursor_col);
+    idx = (uint8_t)(cursor.row * GRID_SIZE + cursor.col);
     old = board_get(idx);
-    board_set(idx, entry_value);
+    board_set(idx, cursor.entry);
     if (board_conflicts(idx)) {
         /* Illegal move: restore, count a mistake, keep picking. */
         board_set(idx, old);
-        ui_cell(cursor_row, cursor_col);
+        ui_cell(cursor.row, cursor.col);
         preview_forget(); /* The redraw killed any visible preview. */
         board_add_mistake();
         ui_cursor_hide();
-        flash = 24;
+        flash = FLASH_REJECT;
+        return 0;
+    }
+    return 1;
+}
+
+/* ... and the caller stays flat too: */
+static void confirm_editing(void) {
+    if (!try_place_digit()) {
         return;
     }
     /* Legal move: show it, back to navigation, check for the win. */
-    editing = 0;
+    cursor.editing = 0;
     preview_forget();
-    ui_cell(cursor_row, cursor_col);
+    ui_cell(cursor.row, cursor.col);
     if (board_is_solved()) {
         win_now();
     }
@@ -262,7 +276,7 @@ while (1) {                        /* forever, 60 times/second */
 }
 ```
 
-Logic first, drawing second (inside handlers via `ui_*`), wait last — always in that order (see `DEVELOPMENT.md` §3.2). `game_update` itself branches on `editing`: navigation keys *mean different things* in pick mode vs move mode. That single `if (editing)` is the whole "modal editing" design — compare `if/else` on mode versus two separate states, and notice the code chose the flag because preview blink, cursor display and START handling are shared between modes.
+Logic first, drawing second (inside handlers via `ui_*`), wait last — always in that order (see `DEVELOPMENT.md` §3.2). `game_update` itself branches on `cursor.editing` into `game_update_nav()` vs `game_update_editing()`: navigation keys *mean different things* in pick mode vs move mode. That single branch is the whole "modal editing" design — the split keeps each half short, while preview blink, cursor display and START handling stay shared in `game_update`.
 
 The frame budget view: 60 frames/second ÷ 4.19 MHz ≈ 70 000 CPU cycles per frame. Every handler must finish well within that (they do — a conflicts scan is ~81 reads). Python thinking ("a millisecond here or there") becomes cycle thinking; small fixed loops are not just style but schedule.
 

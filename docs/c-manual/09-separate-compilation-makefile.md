@@ -7,7 +7,7 @@ A real C program is many `.c` files compiled separately and stitched together by
 Python splits code into modules for readability; C additionally splits for **compile time, portability boundaries, and information hiding**:
 
 - Change `ui.c` → only `ui.c` recompiles; `board.c`'s object is reused. (This `Makefile` recompiles everything each time for simplicity — 9 small files take seconds — but the *model* is separate, and §6 shows the per-file pattern for when projects outgrow one-shot builds.)
-- `board.c` + `puzzles.c` compile with desktop `gcc` for tests; `ui.c` + `input.c` need GBDK headers and only build for the Game Boy. File boundaries *are* portability boundaries (§3 `test-host` excludes exactly the hardware files).
+- `board.c` + `puzzles.c` + `save_format.c` compile with desktop `gcc` for tests; `ui.c` + `input.c` need GBDK headers and only build for the Game Boy. File boundaries *are* portability boundaries (§3 `test-host` excludes exactly the hardware files).
 - Each header publishes the minimum: callers of `board.h` cannot see `cells[]` or `cell_index` (both `static`), so they cannot depend on them. The compiler enforces the architecture.
 
 Each `.c` compiles **alone** (a *translation unit* = one `.c` plus all its pasted headers): it sees only its `#include`s. `board.c` knows nothing about `main.c` — the header promises were enough. The linker introduces them afterwards. This isolation is what makes separate testing possible at all.
@@ -55,7 +55,8 @@ LCC = $(GBDK)/bin/lcc
 
 PROJECT = sudoku
 ROM = build/$(PROJECT).gb
-CSOURCES = src/board.c src/input.c src/main.c src/puzzles.c src/puzzles_gen.c src/save.c src/tiles.c src/tiles_gen.c src/ui.c
+CSOURCES = src/board.c src/input.c src/main.c src/puzzles.c src/puzzles_gen.c src/save.c src/save_format.c src/tiles.c src/tiles_gen.c src/ui.c
+HOST_SOURCES = tests/test_host.c src/board.c src/puzzles.c src/puzzles_gen.c src/save_format.c
 ```
 
 - `GBDK`/`LCC`: the vendored Game Boy toolchain lives *inside the repo* (`tools/gbdk/`, gitignored, fetched once with `make setup-gbdk`). No global install, reproducible builds — `GBDK_URL` pins the exact tarball so fresh clones get the identical compiler.
@@ -84,14 +85,14 @@ $(ROM): $(CSOURCES) src/*.h
 	$(LCC) $(LCCFLAGS) -o $@ $(CSOURCES)
 ```
 
-`all` is the default target (`make` = `make all`). The ROM depends on every source and header: any change rebuilds everything (coarse but correct for 9 files; §6 refines it). `$@` = `build/sudoku.gb`. One `lcc` invocation compiles *and* links all nine files in one go.
+`all` is the default target (`make` = `make all`). The ROM depends on every source and header: any change rebuilds everything (coarse but correct for 10 files; §6 refines it). `$@` = `build/sudoku.gb`. One `lcc` invocation compiles *and* links all ten files in one go.
 
 ```make
-test-host: tests/test_host.c src/board.c src/puzzles.c src/puzzles_gen.c
-	gcc -Wall -Wextra -Isrc -o /tmp/sudoku_test tests/test_host.c src/board.c src/puzzles.c src/puzzles_gen.c && /tmp/sudoku_test
+test-host: $(HOST_SOURCES) src/*.h
+	gcc -std=c99 -Wall -Wextra -Werror -Isrc -o /tmp/sudoku_test $(HOST_SOURCES) && /tmp/sudoku_test
 ```
 
-Note what is **excluded**: `main.c` (needs GBDK `main` signature/flow), `ui.c`/`tiles*.c` (VRAM/GBDK calls), `input.c` (`joypad()`), `save.c` (`ENABLE_RAM`, SRAM address) — everything touching hardware. Only the portable logic is tested on PC, which is precisely the file set with zero `<gb/…>` includes. `-Isrc` tells `gcc` where `"board.h"` lives when compiling from `tests/`. The trailing `&& /tmp/sudoku_test` runs the tests only if compilation succeeded — `;` there would run (stale or missing) binaries after failures.
+Note what is **excluded**: `main.c` (needs GBDK `main` signature/flow), `ui.c`/`tiles*.c` (VRAM/GBDK calls), `input.c` (`joypad()`), `save.c` (`ENABLE_RAM`, SRAM address) — everything touching hardware. Only the portable logic is tested on PC, which is precisely the file set with zero `<gb/…>` includes (`board`, `puzzles`, `save_format`). `-Isrc` tells `gcc` where `"board.h"` lives when compiling from `tests/`; `-std=c99 -Werror` holds host code to the same zero-warning bar as the ROM. The trailing `&& /tmp/sudoku_test` runs the tests only if compilation succeeded — `;` there would run (stale or missing) binaries after failures.
 
 ```make
 check: $(ROM)

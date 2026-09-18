@@ -85,17 +85,19 @@ The LCD draws top-to-bottom (~144 lines), then rests: **VBlank** (~10 lines' tim
 
 ## 9. Input: no events, only "held right now" (edge + repeat from bits)
 
-`joypad()` returns a bitmask of currently held buttons — no press/release events, no queue, no timestamps. `src/input.c` (93 lines) builds the entire event layer in software:
+`joypad()` returns a bitmask of currently held buttons — no press/release events, no queue, no timestamps. `src/input.c` builds the entire event layer in software:
 
 ```c
 now = joypad();
 just_pressed = (uint8_t)(now & (uint8_t)~prev_state);  /* edge: new this frame (ch.07 C) */
 combo_fire = (uint8_t)((now & COMBO_MASK) == COMBO_MASK &&
                        (prev_state & COMBO_MASK) != COMBO_MASK);  /* chord became complete */
-if ((now & (J_UP | J_DOWN | J_LEFT | J_RIGHT)) == 0) repeat_count = 0;      /* released */
-else if (just_pressed & (J_UP | J_DOWN | J_LEFT | J_RIGHT)) repeat_count = 0; /* new press */
-else if (repeat_count < 255) repeat_count++;                                /* held: saturate */
+if ((now & (J_UP | J_DOWN | J_LEFT | J_RIGHT)) == 0) repeat_held = 0;      /* released */
+else if (just_pressed & (J_UP | J_DOWN | J_LEFT | J_RIGHT)) repeat_held = 0; /* new press */
+else if (repeat_held < 60000) repeat_held++;  /* held: 16-bit, never stalls */
 ```
+
+`repeat_held` is deliberately 16-bit: the old 8-bit counter capped at 255 and froze the repeat after ~4 s of holding (the modulo below stopped firing). One shared timer serves all directions (documented in the file: callers pass one direction per `input_dir()` call).
 
 `input_pressed(mask)` = `just_pressed & mask`: single actions (A confirm, B erase/cancel, START, SELECT). `input_dir(mask)` = first press immediately, then repeat every 6 frames after an 18-frame delay (`REPEAT_DELAY`/`REPEAT_RATE` — 0.3 s pause, 10 steps/s, the feel of every held cursor). `input_reset_combo()` fires once when A+B+START+SELECT *become* jointly held (edge on the chord, not the level — holding it does not reset twice).
 

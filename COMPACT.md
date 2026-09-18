@@ -75,21 +75,26 @@ src/
                  + puzzle_solution/given + difficulty_name; 300 levels
   puzzles_gen.c  GENERATED: 300 packed levels (do not edit)
   puzzles.c      difficulty_name()
-  board.h/.c     cells[81] + origin[81] + mistakes (tally only)
-  input.h/.c     joypad edge detection + D-Pad auto-repeat
+  board.h/.c     cells[81] + cell_origin[81] + mistakes (tally only)
+  input.h/.c     joypad edge detection + D-Pad auto-repeat (16-bit timer)
+  save.h/.c      battery SRAM I/O (MBC latch); format + validation in
+  save_format.h/.c  hardware-free layout/checksum (host-tested)
   tiles.h/.c     resident VRAM layout + one-time copy (art in tiles_gen.c)
   tiles_gen.c    GENERATED: 230 grid + 4 cursor tiles (do not edit)
   ui.h/.c        hidden-map draws + atomic present + delta updates
-  main.c         SELECT -> GAME <-> PAUSE -> WIN
+                 (use_hidden_map routing, UI_PAUSE_COUNT shared with main)
+  main.c         SELECT -> GAME <-> PAUSE -> WIN (+SAVED);
+                 Cursor/Preview/Pending structs, split game_update
 tools/gen_puzzles.py  full grid + dig with uniqueness check (cap 2)
 tools/gen_tiles.py    precomputed 16x16 artwork (19 contents x variants)
 tools/smoke_pyboy.py  per-frame transition checks (no display needed)
 tests/test_host.c     gcc tests (no GBDK includes) for logic modules
+                        (board/puzzles/marks/restore + save_format)
 ```
 
 Clean-code invariants (keep them):
 
-- `board`, `puzzles` **never include `<gb/gb.h>`**.
+- `board`, `puzzles`, `save_format` **never include `<gb/gb.h>`**.
 - One responsibility per module; one handler per state in `main.c`;
   one screen per function in `ui.c` (+ small delta helpers).
 - No stdio/console in `ui.c`: text = font tiles via `set_bkg_*`.

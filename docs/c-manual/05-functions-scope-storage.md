@@ -23,9 +23,10 @@ Parameter names in declarations are documentation (`uint8_t board_get(uint8_t id
 ## 2. Anatomy of a function
 
 ```c
-/* src/board.c:63 */
+/* src/board.c:72 */
 uint8_t board_conflicts(uint8_t idx) {
     uint8_t row, col, r, c, value;
+    uint8_t box_row0, box_col0;
 
     value = cells[idx];
     if (value == 0) {
@@ -33,7 +34,8 @@ uint8_t board_conflicts(uint8_t idx) {
     }
     row = (uint8_t)(idx / GRID_SIZE);
     col = (uint8_t)(idx % GRID_SIZE);
-    /* ... row scan, column scan, box scan, each `return 1;` on first duplicate ... */
+    /* ... row scan, column scan, box scan (corner precomputed once),
+       each `return 1;` on first duplicate ... */
     return 0;
 }
 ```
@@ -80,7 +82,7 @@ int main(void) {
 > reset(&x);                          /* now x == 0 */
 > ```
 >
-> This is why `scanf("%d", &guess)` (chapter 02) and `save_read(&slot)` (`main.c:593`) take `&…`: they need to write into the caller's memory. And it is why `board_restore(values, origins, 2)` passes arrays (which decay to addresses) but the mistake count by value.
+> This is why `scanf("%d", &guess)` (chapter 02) and `save_read(&slot)` (`main.c:670`) take `&…`: they need to write into the caller's memory. And it is why `board_restore(values, origins, 2)` passes arrays (which decay to addresses) but the mistake count by value.
 
 Repo consequence: `board_set(idx, value)` works because the grid is a **global `static` array**, not a parameter — the function writes directly to shared storage. `marks_set(bm, level)` works on any bitmap because the caller passes the array (arrays decay to addresses, chapter 06). Two parameter-passing idioms, chosen by size and sharing intent: small inputs by value, shared/output data by address. `const`-qualified addresses (`const uint8_t *values`) add "read-only" to the contract.
 
@@ -93,26 +95,28 @@ Cost model: passing a `uint8_t` costs a byte on the stack; passing a `SaveSlot` 
 **4a. `static` on a function or file-scope variable = private to this file (internal linkage).**
 
 ```c
-/* src/main.c:152 — only main.c can call wrap_add */
+/* src/main.c:167 — only main.c can call wrap_add */
 static uint8_t wrap_add(uint8_t v, int8_t d, uint8_t n) { /* ... */ }
 ```
 
-Non-`static` functions (`board_load`, `ui_select`, …) are the module's public API, listed in the header, visible to the linker. `static` helpers (`wrap_add`, `cell_index`, `preview_update`, `preview_erase`, `sram_valid`, `sram_read`, …) are implementation details. If it is `static`, you can change it freely — no other file depends on it. If it is public, changing the signature means updating the header plus every caller.
+Non-`static` functions (`board_load`, `ui_select`, …) are the module's public API, listed in the header, visible to the linker. `static` helpers (`wrap_add`, `cell_index`, `preview_update`, `preview_erase`, `sram_valid`, `sram_read`, `marker_pair_set`, `try_place_digit`, …) are implementation details. If it is `static`, you can change it freely — no other file depends on it. If it is public, changing the signature means updating the header plus every caller.
 
 The linker enforces this: two files may each define their own `static uint8_t i;` or `static void helper(void)` with zero conflict — they are different entities that happen to share a name. Two files defining *non-static* `helper` is a `multiple definition` link error (chapter 09 §2).
 
 **4b. `static` storage duration = lives forever in RAM (zero-initialised).**
 
 ```c
-/* src/board.c:9 — the grid, alive for the whole session */
+/* src/board.c — the live game, 81 + 81 + 1 bytes, zeroed at boot */
 static uint8_t cells[CELL_COUNT];
-static uint8_t origin[CELL_COUNT];
+static uint8_t cell_origin[CELL_COUNT];
 static uint8_t error_count;
 
-/* src/main.c:52 — game state, likewise persistent */
+/* src/main.c — game state, likewise persistent (grouped in structs) */
 static State state;
 static uint16_t level;
-static uint8_t cursor_row, cursor_col;
+static Cursor cursor;        /* row/col/entry/editing */
+static Preview pv;           /* blink tracker */
+static Pending pend;         /* deferred win/save screens */
 static uint8_t marks[MARKS_BYTES];
 static SaveSlot slot;
 ```
@@ -126,7 +130,7 @@ void counter(void) {
 }
 ```
 
-versus a plain local, reborn garbage on every entry. The codebase relies on zero-initialisation of statics (`marks` starts cleared; `state` starts `ST_DIFF == 0`; `error_count` starts 0) — and still calls `marks_clear`/explicit resets on transitions, because "starts zeroed" covers boot but not restart-after-win. Belt and suspenders: trust the language for boot, reset explicitly for replay.
+versus a plain local, reborn garbage on every entry. The codebase relies on zero-initialisation of statics (`state` starts `ST_DIFF == 0`; `error_count` starts 0) — and still calls `marks_clear(marks)` plus explicit field resets at boot, because "starts zeroed" covers boot but not restart-after-win. Belt and suspenders: trust the language for boot, reset explicitly for replay.
 
 `extern` (preview of chapter 08) is `static`'s mirror: "this name lives in *another* file" (`extern const Puzzle puzzles[LEVEL_COUNT]`). `static` = mine alone; `extern` = someone else's, shared.
 
@@ -199,13 +203,13 @@ uint8_t count_filled(void) {
 }
 ```
 
-81 nested frames × (return address + locals) would work on PC and flirt with the Game Boy's stack. Iteration is not just taste here; it is budget. The main-loop state (`state, level, cursor_*, editing, marks, slot, …`) is all `static` for the same reason it is file-scoped: it must survive across frames, `main` never returns, and threading 10+ variables through every handler would obscure the logic for no benefit on a single-threaded game. File-`static` state with small handlers is the pragmatic C equivalent of a Python object's `self.*` attributes.
+81 nested frames × (return address + locals) would work on PC and flirt with the Game Boy's stack. Iteration is not just taste here; it is budget. The main-loop state (`state, level, cursor, pv, pend, marks, slot, …`) is all `static` for the same reason it is file-scoped: it must survive across frames, `main` never returns, and threading 10+ variables through every handler would obscure the logic for no benefit on a single-threaded game. File-`static` state with small handlers is the pragmatic C equivalent of a Python object's `self.*` attributes.
 
 Call-depth audit of the game: `main → handler → board/ui helper`, two levels, bounded locals. That sentence is the whole stack-safety argument, and any change adding depth (callbacks, recursion, big locals) must re-make it.
 
 ## 7. Reading a new function in 30 seconds
 
-Checklist (try it on `confirm_editing` in `src/main.c:271`, then on `sram_valid` in `src/save.c:63`):
+Checklist (try it on `try_place_digit`/`confirm_editing` in `src/main.c:307`, then on `sram_valid` in `src/save.c:47`):
 
 1. Signature: what goes in, what comes out? (`void` = nothing. Pointer = shared/output data.)
 2. `static`? Private helper (free to change) or public API (header contract)?

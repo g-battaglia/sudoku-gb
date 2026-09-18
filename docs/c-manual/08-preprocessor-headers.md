@@ -41,7 +41,7 @@ Before compiling, every `GRID_SIZE` becomes `9`. Uses in this repo:
 - Derived constants: `MARKS_BYTES` is computed from `LEVEL_COUNT`, which comes from `DIFF_COUNT * DIFF_LEVELS` in `puzzles.h`. Change difficulties → bitmap resizes automatically, including the save-slot layout that embeds `MARKS_BYTES`.
 - Parenthesise macro bodies: `((LEVEL_COUNT + 7) / 8)` — without parens, `MARKS_BYTES * 2` would expand to `LEVEL_COUNT + 7 / 8 * 2` (wrong: `/` binds tighter than `+`). The double parens are not style; they are correctness. Same for every macro containing operators.
 
-Pitfall: misspelled macro names are *different* macros (or undeclared identifiers), and `#define` has no type — `GRID_SIZE` is just `9` wherever it lands. Prefer `const`/`enum` when you want checking (chapter 03 §4 table); keep `#define` for sizes, offsets (`OFF_VALUES` in `save.c`), and conditional compilation. `#undef` removes a macro (rare; used to confine a temporary definition to part of a file).
+Pitfall: misspelled macro names are *different* macros (or undeclared identifiers), and `#define` has no type — `GRID_SIZE` is just `9` wherever it lands. Prefer `const`/`enum` when you want checking (chapter 03 §4 table); keep `#define` for sizes, offsets (`SAVE_OFF_VALUES` in `save_format.h`), and conditional compilation. `#undef` removes a macro (rare; used to confine a temporary definition to part of a file).
 
 ## 4. Function-like macros: power with three traps
 

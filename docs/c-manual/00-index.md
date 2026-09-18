@@ -15,7 +15,7 @@ Conventions used everywhere:
 
 - `Python vs C` boxes translate something you know into the C equivalent.
 - `Try it` boxes are things to type now. Do them — C is learned by compiler errors, not by reading.
-- `Repo link` boxes point at a real file, e.g. `src/board.c:9`. Open the file; the manual quotes it exactly.
+- `Repo link` boxes point at a real file, e.g. `src/board.c:14`. Open the file; the manual quotes it exactly.
 - `Warning` boxes mark undefined behaviour or silent-corruption traps. Slow down there.
 
 ## The repo in 30 seconds
@@ -96,6 +96,8 @@ Total: roughly 9–10 focused hours from zero to "can modify this codebase safel
 | `marks_clear/set/get/count` | function | `board.c` | 38-byte completion bitmap |
 | `MARKS_BYTES` | macro | `board.h` | 38 |
 | `SaveSlot` | struct | `save.h` | whole save: game + marks |
+| `save_checksum/fields_valid` | function | `save_format.c` | layout math, no hardware |
+| `SAVE_OFF_*` / `SAVE_VERSION` | macro | `save_format.h` | offsets + version |
 | `save_present/read/write` | function | `save.c` | validate / load / store SRAM slot |
 | `input_poll(_init)` | function | `input.c` | snapshot joypad once per frame |
 | `input_pressed/dir` | function | `input.c` | edge actions / repeat movement |
@@ -103,7 +105,10 @@ Total: roughly 9–10 focused hours from zero to "can modify this codebase safel
 | `ui_init/diff/select/pause/win/saved` | function | `ui.c` | full screens (hidden map + present) |
 | `ui_cell/preview/cursor(_hide)` | function | `ui.c` | delta updates (visible map / OAM) |
 | `GRID_X/Y`, `LEVELS_PER_PAGE` | macro | `ui.h` | map origin / 10 |
-| `state/level/cursor_*/editing` | static | `main.c` | session state machine data |
+| `state/level/sel_diff` | static | `main.c` | session state machine data |
+| `cursor` (`Cursor`) | static struct | `main.c` | row/col/entry/editing |
+| `pv` (`Preview`) | static struct | `main.c` | blink tracker (row = `PV_NONE` = untracked) |
+| `pend` (`Pending`) | static struct | `main.c` | deferred win/save screens |
 | `start_level/resume_game/save_store` | static fn | `main.c` | transitions + SRAM snapshot |
 | `enter/confirm/cancel/editing` | static fn | `main.c` | modal digit-pick flow |
 | `do_hint/apply_load/win_now` | static fn | `main.c` | hint / load / win-record |

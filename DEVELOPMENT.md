@@ -95,7 +95,9 @@ are deterministic — running twice produces byte-identical files.
    test if a rule breaks). If you change `board.c`, run it.
 6. **`src/save.h`, then `src/save.c`** — the battery save slot:
    `SaveSlot` bundles one game in progress + the completion marks;
-   `save_read`/`save_write` do the SRAM access (§3.5).
+   `save_read`/`save_write` do the SRAM access (§3.5). The on-wire
+   layout, checksum and field validation live in the hardware-free
+   `src/save_format.{h,c}`, shared with the PC host tests.
 7. **`src/input.h` + `src/input.c`** — the Game Boy has no key
    *events*, only "buttons held right now". This module remembers last
    frame's buttons and reports each physical press once (`pressed`),
@@ -151,7 +153,7 @@ last — always in that order.
 
 On a free cell, `A` calls `enter_editing()`: from now on Up/Down
 and Left/Right
-change `entry_value` instead of moving the cursor. Every frame,
+change `cursor.entry` instead of moving the cursor. Every frame,
 `preview_update()` draws or erases the blinking digit with
 `ui_preview()` — the **board is never touched** by the blink. `A`
 (`confirm_editing()`) writes the digit and checks conflicts: illegal
@@ -243,7 +245,9 @@ visible map or shadow OAM.
 ## 5. Safe changes (recipes)
 
 - **Change help text / menu layout**: edit `draw_*_content()` in
-  `src/ui.c`. Keep lines within 20 columns; numbers via `draw_num*`.
+  `src/ui.c`. Keep lines within 20 columns; numbers via `draw_dec3`
+  (ERRORS/LEVEL) and `draw_num2` (PAGE). Marker pairs go through
+  `marker_pair_set()`.
 - **Change rules** (e.g. what counts as a mistake): edit `src/board.c`
   (+ `tests/test_host.c`), run `make test-host`. Never `#include`
   Game Boy headers there — PC testability is a feature.
@@ -269,7 +273,7 @@ visible map or shadow OAM.
    frame-by-frame: no blank/mixed frame, OAM matches the screen).
 5. `make run` — human eyeball pass in mGBA.
 6. Regressions usually come from: drawing to the wrong map (check
-   `draw_hidden` routing), touching sprites after presenting (prepare
+   `use_hidden_map` routing), touching sprites after presenting (prepare
    OAM *before* `screen_present`), or changing generator indexing
    without updating `tiles.h`.
 

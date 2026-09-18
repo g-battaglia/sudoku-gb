@@ -28,7 +28,7 @@ Why the repo loves `uint8_t`:
 - A Sudoku digit is 0–9. A row is 0–8. A cell index is 0–80. All fit in one byte.
 - `static uint8_t cells[81]` = exactly 81 bytes. Using `int cells[81]` would cost 162+ bytes on the Game Boy for zero benefit, out of 8192 total WRAM bytes.
 
-Why `uint16_t` exists here: levels are 0–299, which does **not** fit in `uint8_t` (max 255). So every level parameter is `uint16_t level` (`src/puzzles.h:50`, `src/board.c:25`). Read a signature and you know the range — this is a deliberate API convention, not decoration. The one place a `uint8_t` level would silently break is level 256+: it would wrap to 0 and load the wrong puzzle with no error message.
+Why `uint16_t` exists here: levels are 0–299, which does **not** fit in `uint8_t` (max 255). So every level parameter is `uint16_t level` (`src/puzzles.h:50`, `src/board.c:32`). Read a signature and you know the range — this is a deliberate API convention, not decoration. The one place a `uint8_t` level would silently break is level 256+: it would wrap to 0 and load the wrong puzzle with no error message.
 
 SDCC quirk (the Game Boy compiler): plain `int` is 16-bit on SDCC, 32-bit on your Mac's `gcc`. Portable code therefore never assumes `int` width for stored data — it uses `uint8_t`/`uint16_t` from `<stdint.h>`. That is why you see them everywhere here. `int` still appears for loop-free arithmetic, return codes, and anything the standard library dictates (`printf` returns `int`, `main` returns `int`).
 
@@ -55,7 +55,7 @@ if (s < u) { /* DANGER: s is converted to unsigned before compare! */
 
 Mixing signed and unsigned in one expression triggers `-Wextra` warnings because of **integer promotion + usual arithmetic conversions**: small integers are first promoted to `int`, and if one side is unsigned `int`-sized or larger, the signed side is converted to unsigned — turning `-1` into `255` (or 65535). The comparison then answers backwards. On the Game Boy this class of bug moves cursors to insane positions with no crash to alert you.
 
-Repo pattern — cursor steps use `int8_t d` (can be −1), positions use `uint8_t v`, and the conversion is fenced inside one helper (`src/main.c:152`):
+Repo pattern — cursor steps use `int8_t d` (can be −1), positions use `uint8_t v`, and the conversion is fenced inside one helper (`src/main.c:167`):
 
 ```c
 /* Wrap v + d into 0..n-1 (menu / select navigation). */
@@ -100,9 +100,9 @@ Three ways to name things, three different meanings:
 ```c
 #define GRID_SIZE 9          /* 1. textual replacement, no memory, no type */
 const uint8_t BOX = 3;       /* 2. read-only variable with a type */
-uint8_t cursor_row = 0;      /* 3. normal variable, read/write */
+uint8_t pos = 0;             /* 3. normal variable, read/write */
 
-cursor_row = 5;  /* fine */
+pos = 5;  /* fine */
 /* BOX = 4; */   /* COMPILE ERROR: const */
 /* GRID_SIZE = 4; */ /* COMPILE ERROR and conceptually wrong: it was never a variable */
 ```
@@ -146,8 +146,8 @@ Assignment shorthands: `+= -= *= /= %= &= |= ^= <<= >>= ++ --`. `error_count++` 
 Ternary: `cond ? a : b` (Python's `a if cond else b`):
 
 ```c
-origin[i] = (g != 0) ? ORIGIN_GIVEN : ORIGIN_PLAYER;  /* src/board.c:32 */
-entry_value = current ? current : 1;                  /* src/main.c:264 */
+cell_origin[i] = (g != 0) ? ORIGIN_GIVEN : ORIGIN_PLAYER;  /* src/board.c:39 */
+cursor.entry = current ? current : 1;                      /* src/main.c:299 */
 ```
 
 Use it for *values*, not control flow; nested ternaries are banned by taste everywhere.
@@ -169,7 +169,7 @@ Full C precedence has 15 levels; you need eight, plus one rule: **when in doubt,
 | 3 | `+ -` | `v + n + d` |
 | 4 | `<< >>` | `1u << (level & 7)`, `level >> 3` |
 | 5 | `< <= > >=` | `i < CELL_COUNT`, `error_count < 255` |
-| 6 | `== !=` | `origin[idx] == ORIGIN_GIVEN` |
+| 6 | `== !=` | `cell_origin[idx] == ORIGIN_GIVEN` |
 | 7 | `&` then `^` then `\|` (bitwise, in that order) | `mask & (1 << k)`, `now & ~prev` |
 | 8 (lowest here) | `&&` then `\|\|` then `? :` then `=` | `!locked && empty`, `g ? A : B` |
 
@@ -191,7 +191,7 @@ printf("%s %d %c %u 0x%X\n", "EASY", -3, 'A', (unsigned)200, 255);
 | `%lu` | `unsigned long` | printing `sizeof` results portably |
 | `%%` | a literal `%` | `"DONE %u/100"`-style progress needs `%%` for a real percent |
 
-> **No float in this codebase** (`PLAN.md` risk table). `%f` would pull a large floating-point library into a 32 KB ROM. Menus format integers only (`draw_num*` in `ui.c`). On constrained targets, every library function costs bytes — another Python-vs-C shock. `scanf` appears in chapter 02's `guess.c` only; the game reads the joypad, never stdin.
+> **No float in this codebase** (`PLAN.md` risk table). `%f` would pull a large floating-point library into a 32 KB ROM. Menus format integers only (`draw_dec3`/`draw_num2` in `ui.c`). On constrained targets, every library function costs bytes — another Python-vs-C shock. `scanf` appears in chapter 02's `guess.c` only; the game reads the joypad, never stdin.
 
 `printf` returns the characters written (or negative on error) — ignored here. Mismatched specifier/argument is undefined behaviour that `-Wall` usually catches (`format '%d' expects argument of type 'int'`). On the Game Boy there is no `printf` at all in game code: text is font tiles via `set_bkg_*` (chapter 11), because stdio would drag in console machinery the ROM cannot afford.
 
@@ -199,7 +199,7 @@ printf("%s %d %c %u 0x%X\n", "EASY", -3, 'A', (unsigned)200, 255);
 
 Unsigned overflow wraps (`255 + 1 == 0` for `uint8_t`) — defined, sometimes wanted (checksums, tile math), usually not (counters). Signed overflow is *undefined* — never rely on it; the compiler may optimise `s + 1 > s` to "always true" and delete your check.
 
-The repo saturates the mistake counter instead of wrapping (`src/board.c:121`):
+The repo saturates the mistake counter instead of wrapping (`src/board.c:134`):
 
 ```c
 void board_add_mistake(void) {

@@ -25,7 +25,7 @@ static uint8_t d[81];       /* 81 zeros (static storage auto-zeroes) */
 
 Partial initialisers zero the rest (`uint8_t e[81] = {1};` → `e[0]==1`, rest 0). No resizing, ever: "append" means tracking a separate length and writing `buf[len++] = v` with a manual capacity check — the save code's fixed offsets (§5 in chapter 10) are this discipline applied to hardware.
 
-The 9×9 grid is stored row by row, *row-major* (`src/board.c:18`):
+The 9×9 grid is stored row by row, *row-major* (`src/board.c:25`):
 
 ```c
 static uint8_t cell_index(uint8_t row, uint8_t col) {
@@ -34,7 +34,7 @@ static uint8_t cell_index(uint8_t row, uint8_t col) {
 /* cell (row, col) == cells[row * 9 + col] */
 ```
 
-Draw it: row 0 occupies indices 0–8, row 1 indices 9–17, …, row 8 indices 72–80. `board_conflicts()` divides and modulos the index back into `(row, col)` to scan (`idx / 9`, `idx % 9`). Consequences of row-major: a row scan strides by 1 (cache- and cycle-friendly), a column scan strides by 9, and a box scan walks a 3×3 window from `(row/3*3, col/3*3)`. Read `src/board.c:63` with this picture taped to your monitor.
+Draw it: row 0 occupies indices 0–8, row 1 indices 9–17, …, row 8 indices 72–80. `board_conflicts()` divides and modulos the index back into `(row, col)` to scan (`idx / 9`, `idx % 9`). Consequences of row-major: a row scan strides by 1 (cache- and cycle-friendly), a column scan strides by 9, and a box scan walks a 3×3 window from a precomputed `(box_row0, box_col0)`. Read `src/board.c:72` with this picture taped to your monitor.
 
 Multi-dimensional arrays exist (`uint8_t grid[9][9]`, `grid[r][c]`) and lay out identically row-major — `grid[r][c]` *is* `*(&grid[0][0] + r*9 + c)`. The repo uses flat `[81]` with `cell_index` instead: one index type (`uint8_t idx`) flows through board, save, puzzle and UI code, while `[9][9]` would force `(row, col)` pairs through every signature including the 38-byte bitmap helpers. One index, fewer parameters, smaller code.
 
@@ -67,7 +67,7 @@ for (i = 0; i < 7 && src[i] != '\0'; i++) buf[i] = src[i];
 buf[i] = '\0';
 ```
 
-Generalise `7` to `dst_size - 1` and you have the shape of `snprintf(dst, size, …)` and `strncpy` used right (see §6). `difficulty_name()` (`src/puzzles.c:31`) returns `const char *`: a pointer to a ROM literal the caller may read but never modify (`const` = read-only promise). Returning a string is returning its *address* — which is safe here only because literals outlive everything (§4 in chapter 05).
+Generalise `7` to `dst_size - 1` and you have the shape of `snprintf(dst, size, …)` and `strncpy` used right (see §6). `difficulty_name()` (`src/puzzles.c:35`) returns `const char *`: a pointer to a ROM literal the caller may read but never modify (`const` = read-only promise). Returning a string is returning its *address* — which is safe here only because literals outlive everything (§4 in chapter 05).
 
 Char vs string literal (one byte vs two-plus): `'A'` is the number 65; `"A"` is bytes `{65, 0}` somewhere in ROM. `char c = "A";` is a type error; `printf("%c", "A")` is undefined behaviour. The compiler's message ("incompatible pointer to integer conversion") is precise once you know the two literal kinds.
 
@@ -93,16 +93,16 @@ void board_restore(const uint8_t *values, const uint8_t *origins, uint8_t mistak
 /* called as: board_restore(values, origins, 2); */
 ```
 
-`board_restore` receives *addresses* of two 81-byte snapshots plus a mistake count, then copies them into the live grid (`src/board.c:142`). Passing 162 bytes by value would waste stack and cycles; passing two addresses costs a few bytes. `tests/test_host.c:224` builds dirty snapshots, trashes the board with `board_load(200)`, restores, and asserts every byte matches — read that test, it is executable documentation for pointers: snapshot, trash, restore, verify.
+`board_restore` receives *addresses* of two 81-byte snapshots plus a mistake count, then copies them into the live grid (`src/board.c`). Passing 162 bytes by value would waste stack and cycles; passing two addresses costs a few bytes. `tests/test_host.c` builds dirty snapshots, trashes the board with `board_load(200)`, restores, and asserts every byte matches — read that test, it is executable documentation for pointers: snapshot, trash, restore, verify.
 
 **Use 2 — walk through memory with arithmetic:**
 
 ```c
-#define SRAM ((uint8_t *)0xA000)  /* src/save.c:24 — SRAM starts at address 0xA000 */
+#define SRAM ((uint8_t *)0xA000)  /* src/save.c — SRAM starts at address 0xA000 */
 SRAM[off] = value;                /* byte at address 0xA000 + off */
 ```
 
-`SRAM` is a pointer to hardware memory. `SRAM[n]` is `*(SRAM + n)` — "the byte `n` past the start". `sram_read`/`sram_write` (`src/save.c:43`) are explicit `for` loops over addresses. Pointer arithmetic scales by element size automatically (`ptr + 1` moves one `uint8_t` = 1 byte; for a `uint16_t *` it would move 2 — a frequent confusion source when mixing widths, and one more reason this codebase sticks to byte pointers for raw memory).
+`SRAM` is a pointer to hardware memory. `SRAM[n]` is `*(SRAM + n)` — "the byte `n` past the start". `sram_read`/`sram_write` (`src/save.c`) are explicit `for` loops over addresses. Pointer arithmetic scales by element size automatically (`ptr + 1` moves one `uint8_t` = 1 byte; for a `uint16_t *` it would move 2 — a frequent confusion source when mixing widths, and one more reason this codebase sticks to byte pointers for raw memory). Field offsets live in `src/save_format.h` (`SAVE_OFF_*`); the checksum and field validation there are hardware-free and host-tested.
 
 **Use 3 — strings and buffers** (`const char *s` = "address of text I will only read"). `const uint8_t *marks` in `ui_select(page, row, marks, diff)` is the same idea for non-text bytes: 38 read-only bytes starting at that address, length carried by the known constant `MARKS_BYTES`.
 
@@ -163,7 +163,7 @@ Debugging order on PC: reproduce under `lldb`/`gdb`, read the faulting address (
 
 ## 8. Worked example: the completion bitmap
 
-`marks_*` (`src/board.c:156`) packs 300 level completions into 38 bytes, one bit per level, LSB-first. This is pointers + arrays + bit ops together (bits fully taught in chapter 07):
+`marks_*` (`src/board.c:174`) packs 300 level completions into 38 bytes, one bit per level, LSB-first. This is pointers + arrays + bit ops together (bits fully taught in chapter 07):
 
 ```c
 void marks_set(uint8_t *bm, uint16_t level) {

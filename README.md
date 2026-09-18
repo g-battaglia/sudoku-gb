@@ -80,6 +80,8 @@ the visible screen. Menus use no stdio: text is written as font tiles.
 - `src/puzzles.*` + `src/puzzles_gen.c` (generated, do not edit).
 - `src/input.*` — joypad debounce. `src/ui.*` — screens + tile grid.
 - `src/save.*` — battery save slot (SRAM read/write + checksum).
+  Layout + validation live in hardware-free `src/save_format.*`
+  (shared with the PC host tests).
 - `src/tiles.*` + `src/tiles_gen.c` (generated) — precomputed grid art.
 - `src/main.c` — state machine. `tools/gen_puzzles.py`,
   `tools/gen_tiles.py` — deterministic generators.
