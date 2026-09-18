@@ -23,14 +23,17 @@
 /* Clear internal state. Call once at startup. */
 void input_poll_init(void);
 
-/* Read the joypad. Call once per frame, before any input_* query. */
+/* Read the joypad. Call once per frame, before any input_* query.
+ * Must run every frame: edge detection compares against last frame. */
 void input_poll(void);
 
-/* Return non-zero if any button in `mask` was JUST pressed this frame. */
+/* Return 1 if any button in `mask` (J_* bits) was JUST pressed this
+ * frame, else 0. Use for single actions (A/B/START/SELECT). */
 uint8_t input_pressed(uint8_t mask);
 
-/* Return non-zero if a direction in `mask` should move the cursor now:
- * true on the first press, then repeatedly while held (after a delay). */
+/* Return 1 if a direction in `mask` should move the cursor now, else 0:
+ * 1 on the first press, then repeated while held (after REPEAT_DELAY,
+ * every REPEAT_RATE frames). Pass a SINGLE direction bit per call. */
 uint8_t input_dir(uint8_t mask);
 
 /* Return 1 on the frame A+B+START+SELECT become all held (the

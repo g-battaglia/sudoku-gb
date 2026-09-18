@@ -24,9 +24,9 @@
  * background maps. Every full screen is drawn into the HIDDEN map
  * while the LCD keeps showing the old one, then one LCDC write swaps
  * the map (+ tile mode + OBJ enable) at the next frame start:
- * - draw_hidden = 1 routes map_* to the hidden map (GBDK set_tiles /
+ * - use_hidden_map = 1 routes map_* to the hidden map (GBDK set_tiles /
  *   set_vram_byte, both WAIT_STAT-guarded, so LCD-on writes are safe);
- * - draw_hidden = 0 routes map_* to the visible map (delta updates:
+ * - use_hidden_map = 0 routes map_* to the visible map (delta updates:
  *   menu markers, page rows, single cells — always LCD-on);
  * - screen_present() does vsync() (the VBlank ISR copies the prepared
  *   shadow OAM) and flips the visible map in a single LCDC write, so
@@ -34,6 +34,10 @@
  * Protocol: begin_draw() -> draw content -> prepare shadow OAM
  * (cursor_place for game, cursor_sprites_off for menus) ->
  * screen_present(). The LCD is stopped exactly once, in ui_init().
+ * -------------------------------------------------------------------------*/
+
+/* ---------------------------------------------------------------------------
+ * Map routing + atomic present (section 1 of 4: VRAM plumbing).
  * -------------------------------------------------------------------------*/
 
 /* LCD on, tiles at 0x8000, map selected by present, sprites 8x8 on,
@@ -52,6 +56,24 @@
 #define MAP_9800 ((uint8_t *)0x9800)
 #define MAP_9C00 ((uint8_t *)0x9C00)
 
+/* --- Menu layout (all in map tiles, 20x18 screen) --- */
+#define DIFF_FIRST_ROW 7      /* EASY at row 7, MEDIUM 8, HARD 9 */
+#define DIFF_LOAD_ROW 10      /* LOAD row (only when a save exists) */
+#define DIFF_LOAD_COL_L 6     /* flanking markers for LOAD */
+#define DIFF_LOAD_COL_R 13
+#define DIFF_LOAD_TEXT_X 8
+#define SELECT_TITLE_ROW 1
+#define SELECT_PAGE_ROW 2
+#define SELECT_FIRST_ROW 3    /* 10 level rows: 3..12 */
+#define SELECT_NUM_X 8        /* 4-wide number block: cols 8-11 */
+#define SELECT_STATUS_X 11
+#define PAUSE_LEVEL_ROW 1
+#define PAUSE_DIFF_ROW 2
+#define PAUSE_ERRORS_ROW 3
+#define PAUSE_FIRST_ITEM_ROW 6 /* 5 items: rows 6..10 */
+#define WIN_LEVEL_ROW 2
+#define WIN_MID_ROW 7
+
 /* One map row of the grid: 9 cells x 2 tiles wide, 2 tile rows. */
 static uint8_t grid_map_row[9 * 2 * 2];
 
@@ -67,8 +89,10 @@ static uint8_t text_tiles[SCREEN_COLS];
 /* 1 = the visible map is 0x9C00 (else 0x9800). Flipped by present. */
 static uint8_t shown_9c00;
 
-/* 1 = map_* writes go to the hidden map (full redraw in progress). */
-static uint8_t draw_hidden;
+/* 1 = map_* writes go to the hidden map (full redraw in progress).
+ * Named use_hidden_map (not draw_*): it is routing state, not a draw
+ * routine. Always paired: begin_draw() ... screen_present(). */
+static uint8_t use_hidden_map;
 
 /* Base address of the map that is NOT shown right now. */
 static uint8_t *hidden_base(void)
@@ -80,7 +104,7 @@ static uint8_t *hidden_base(void)
 static void map_tiles(uint8_t x, uint8_t y, uint8_t w, uint8_t h,
                       const uint8_t *tiles)
 {
-    if (draw_hidden) {
+    if (use_hidden_map) {
         set_tiles(x, y, w, h, hidden_base(), tiles);
     } else {
         set_bkg_tiles(x, y, w, h, tiles);
@@ -90,7 +114,7 @@ static void map_tiles(uint8_t x, uint8_t y, uint8_t w, uint8_t h,
 /* Write one tile (routes hidden/visible, always VRAM-safe). */
 static void map_tile(uint8_t x, uint8_t y, uint8_t t)
 {
-    if (draw_hidden) {
+    if (use_hidden_map) {
         set_vram_byte(hidden_base() + (uint16_t)((uint16_t)y * 32 + x), t);
     } else {
         set_bkg_tile_xy(x, y, t);
@@ -98,7 +122,8 @@ static void map_tile(uint8_t x, uint8_t y, uint8_t t)
 }
 
 /* Fill the 20x18 viewport (all SCX/SCY = 0 ever shows). Only used for
- * full redraws (draw_hidden = 1). */
+ * full redraws (use_hidden_map = 1). Cost: 360 VRAM writes, menus only
+ * (never per-frame): fine on the DMG. */
 static void map_fill_view(uint8_t t)
 {
     uint8_t x, y;
@@ -113,7 +138,7 @@ static void map_fill_view(uint8_t t)
 /* Start a full redraw into the hidden map (LCD keeps showing old). */
 static void begin_draw(void)
 {
-    draw_hidden = 1;
+    use_hidden_map = 1;
 }
 
 /* Show the hidden map: wait for VBlank (shadow OAM is copied there),
@@ -122,7 +147,7 @@ static void begin_draw(void)
  * or LCDC_MENU (both keep the LCD bit set: it never clears again). */
 static void screen_present(uint8_t mode)
 {
-    draw_hidden = 0;
+    use_hidden_map = 0;
     vsync();
     if (shown_9c00) {
         LCDC_REG = (uint8_t)(mode & (uint8_t)~LCDCF_BG9C00);
@@ -131,6 +156,13 @@ static void screen_present(uint8_t mode)
     }
     shown_9c00 = (uint8_t)(!shown_9c00);
 }
+
+/* ---------------------------------------------------------------------------
+ * Text helpers (section 2 of 4). All text is font tiles (ASCII c =
+ * tile c - 32) via map_* above. Two number formats only, each with one
+ * use: draw_dec3 (ERRORS/LEVEL, 3 digits zero-padded) and draw_num2
+ * (PAGE, 2 chars space-padded, fixed width keeps the line stable).
+ * -------------------------------------------------------------------------*/
 
 /* Draw a NUL-terminated string at map (x, y). Clipped to the row end.
  * Safe with the LCD on or off. */
@@ -169,24 +201,18 @@ static uint8_t draw_num2(uint8_t x, uint8_t y, uint8_t n)
     return 2;
 }
 
-/* Draw unsigned 0-255 without padding (1-3 digits). Returns the width. */
-static uint8_t draw_num(uint8_t x, uint8_t y, uint8_t n)
+/* Set a flanking `>`/`<` marker pair (diff + pause menus share it).
+ * In: marker column/row pairs, selected 1 = show, 0 = erase to spaces. */
+static void marker_pair_set(uint8_t xl, uint8_t xr, uint8_t y,
+                            uint8_t selected)
 {
-    uint8_t w;
-
-    w = 0;
-    if (n >= 100) {
-        text_tiles[w] = (uint8_t)('0' + (uint8_t)(n / 100) - 32);
-        w++;
+    if (selected) {
+        map_tile(xl, y, (uint8_t)('>' - 32));
+        map_tile(xr, y, (uint8_t)('<' - 32));
+    } else {
+        map_tile(xl, y, (uint8_t)(' ' - 32));
+        map_tile(xr, y, (uint8_t)(' ' - 32));
     }
-    if (n >= 10) {
-        text_tiles[w] = (uint8_t)('0' + (uint8_t)((n / 10) % 10) - 32);
-        w++;
-    }
-    text_tiles[w] = (uint8_t)('0' + (uint8_t)(n % 10) - 32);
-    w++;
-    map_tiles(x, y, w, 1, text_tiles);
-    return w;
 }
 
 /* Width of a NUL-terminated string, in tiles. */
@@ -209,27 +235,28 @@ static void draw_centered(uint8_t y, const char *s)
     draw_text((uint8_t)((SCREEN_COLS - text_w(s)) / 2), y, s);
 }
 
-/* Draw one select row as a fixed 4-wide centered block (cols 8-11):
- * number + status char ('<' selected, pointing at the number, '*'
- * done, '-' else). Every row shows the same width, so every row is
- * perfectly symmetric. `marks` is the battery-saved completion
- * bitmap (one bit per level). */
+/* Draw one select row as a fixed 4-wide centered block
+ * (SELECT_NUM_X..SELECT_NUM_X+3): 3-digit number + status char ('<'
+ * selected pointing at the number, '*' done, '-' else). Fixed width
+ * keeps every row symmetric. `marks` is the battery-saved bitmap. */
 static void select_draw_row(uint8_t diff, uint8_t page, uint8_t i,
                             uint8_t row, const uint8_t *marks)
 {
-    uint8_t r, n;
+    uint8_t r, n, shown;
 
-    r = (uint8_t)(page * LEVELS_PER_PAGE + i); /* 0-99, shown */
-    n = (uint8_t)(diff * DIFF_LEVELS + r); /* absolute, bitmap index */
-    text_tiles[0] = (uint8_t)('0' + (uint8_t)((r + 1) / 100) - 32);
-    text_tiles[1] = (uint8_t)('0' + (uint8_t)(((r + 1) / 10) % 10) - 32);
-    text_tiles[2] = (uint8_t)('0' + (uint8_t)((r + 1) % 10) - 32);
+    r = (uint8_t)(page * LEVELS_PER_PAGE + i); /* 0-99 within diff */
+    n = (uint8_t)(diff * DIFF_LEVELS + r);     /* absolute bitmap index */
+    shown = (uint8_t)(r + 1);                  /* 1-100 on screen */
+    text_tiles[0] = (uint8_t)('0' + (uint8_t)(shown / 100) - 32);
+    text_tiles[1] = (uint8_t)('0' + (uint8_t)((shown / 10) % 10) - 32);
+    text_tiles[2] = (uint8_t)('0' + (uint8_t)(shown % 10) - 32);
     if (i == row) {
         text_tiles[3] = (uint8_t)('<' - 32);
     } else {
         text_tiles[3] = (uint8_t)((marks_get(marks, n) ? '*' : '-') - 32);
     }
-    map_tiles(8, (uint8_t)(3 + i), 4, 1, text_tiles);
+    map_tiles(SELECT_NUM_X, (uint8_t)(SELECT_FIRST_ROW + i), 4, 1,
+              text_tiles);
 }
 
 /* Status char of a select row (to redraw it when the marker moves). */
@@ -241,9 +268,9 @@ static uint8_t select_status(uint8_t n, const uint8_t *marks)
 /* Draw the PAGE line: fixed 10-wide block (cols 5-14), symmetric. */
 static void select_draw_page(uint8_t page)
 {
-    draw_text(5, 2, "PAGE ");
-    draw_num2(10, 2, (uint8_t)(page + 1));
-    draw_text(12, 2, "/10");
+    draw_text(5, SELECT_PAGE_ROW, "PAGE ");
+    draw_num2(10, SELECT_PAGE_ROW, (uint8_t)(page + 1));
+    draw_text(12, SELECT_PAGE_ROW, "/10");
 }
 
 /* Draw the select screen content (works hidden or visible). Title is
@@ -253,7 +280,7 @@ static void draw_select_content(uint8_t page, uint8_t row,
 {
     uint8_t i;
 
-    draw_centered(1, difficulty_name(diff));
+    draw_centered(SELECT_TITLE_ROW, difficulty_name(diff));
     select_draw_page(page);
     for (i = 0; i < LEVELS_PER_PAGE; i++) {
         select_draw_row(diff, page, i, row, marks);
@@ -272,8 +299,8 @@ static void draw_select_content(uint8_t page, uint8_t row,
 /* Draw the difficulty screen content (works hidden or visible).
  * Item names are all even width and individually centered; selection
  * shows a `>` and `<` pair flanking the name (symmetric marker).
- * When `has_load` is set a fourth item LOAD (row 10) resumes the
- * battery save. */
+ * When `has_load` is set a fourth item LOAD resumes the battery save.
+ * In: choice 0..DIFF_COUNT (DIFF_COUNT = LOAD row), has_load 0/1. */
 static void draw_diff_content(uint8_t choice, uint8_t has_load)
 {
     uint8_t i, x, w;
@@ -282,20 +309,24 @@ static void draw_diff_content(uint8_t choice, uint8_t has_load)
     for (i = 0; i < DIFF_COUNT; i++) {
         w = text_w(difficulty_name(i));
         x = (uint8_t)((SCREEN_COLS - w) / 2);
-        map_tile((uint8_t)(x - 2), (uint8_t)(7 + i),
-                 (uint8_t)((choice == i ? '>' : ' ') - 32));
-        map_tile((uint8_t)(x + w + 1), (uint8_t)(7 + i),
-                 (uint8_t)((choice == i ? '<' : ' ') - 32));
-        draw_text(x, (uint8_t)(7 + i), difficulty_name(i));
+        marker_pair_set((uint8_t)(x - 2), (uint8_t)(x + w + 1),
+                        (uint8_t)(DIFF_FIRST_ROW + i), (uint8_t)(choice == i));
+        draw_text(x, (uint8_t)(DIFF_FIRST_ROW + i), difficulty_name(i));
     }
     if (has_load) {
-        map_tile(6, 10, (uint8_t)((choice == DIFF_COUNT ? '>' : ' ') - 32));
-        map_tile(13, 10, (uint8_t)((choice == DIFF_COUNT ? '<' : ' ') - 32));
-        draw_text(8, 10, "LOAD");
+        marker_pair_set(DIFF_LOAD_COL_L, DIFF_LOAD_COL_R, DIFF_LOAD_ROW,
+                        (uint8_t)(choice == DIFF_COUNT));
+        draw_text(DIFF_LOAD_TEXT_X, DIFF_LOAD_ROW, "LOAD");
     }
     draw_centered(13, "100 LEVELS");
     draw_centered(14, "A CHOOSE");
 }
+
+/* ---------------------------------------------------------------------------
+ * Game grid content (section 3 of 4). Reads the board for cell values
+ * only (ui_cell/draw_grid_row); status lines (level/mistakes) are
+ * passed in as values so screens stay pure drawing.
+ * -------------------------------------------------------------------------*/
 
 /* Draw grid row `row` (2 tile rows) into the map. */
 static void draw_grid_row(uint8_t row)
@@ -335,8 +366,9 @@ static void draw_game_content(void)
 
 /* Pause menu items: all even width, individually centered; selection
  * shows a `>` and `<` pair flanking the item (symmetric marker).
+ * Count is UI_PAUSE_COUNT (ui.h): main.c shares it, no duplicate 5.
  * SAVE writes the battery save slot. */
-static const char *PAUSE_ITEMS[5] = {
+static const char *PAUSE_ITEMS[UI_PAUSE_COUNT] = {
     "RESUME", "HINT", "SAVE", "PLAY AGAIN", "MENU"
 };
 static uint8_t pause_item_x(uint8_t i)
@@ -345,28 +377,30 @@ static uint8_t pause_item_x(uint8_t i)
 }
 
 /* Draw the START menu content. Every line is a fixed even-width block
- * centered on the 20-tile screen: perfect symmetry at all times. */
-static void draw_pause_content(uint8_t choice, uint8_t lid, uint8_t diff)
+ * centered on the 20-tile screen: perfect symmetry at all times.
+ * In: choice < UI_PAUSE_COUNT, lid 0-99, diff 0-2, mistakes tally. */
+static void draw_pause_content(uint8_t choice, uint8_t lid, uint8_t diff,
+                               uint8_t mistakes)
 {
     uint8_t i, x;
 
     /* LEVEL ddd OF 100 = 16 wide, cols 2-17. */
-    draw_text(2, 1, "LEVEL ");
-    draw_dec3(8, 1, (uint8_t)(lid + 1));
-    draw_text(11, 1, " OF ");
-    draw_text(15, 1, "100");
-    draw_centered(2, difficulty_name(diff));
+    draw_text(2, PAUSE_LEVEL_ROW, "LEVEL ");
+    draw_dec3(8, PAUSE_LEVEL_ROW, (uint8_t)(lid + 1));
+    draw_text(11, PAUSE_LEVEL_ROW, " OF ");
+    draw_text(15, PAUSE_LEVEL_ROW, "100");
+    draw_centered(PAUSE_DIFF_ROW, difficulty_name(diff));
     /* ERRORS ddd = 10 wide, cols 5-14. */
-    draw_text(5, 3, "ERRORS ");
-    draw_dec3(12, 3, board_errors());
+    draw_text(5, PAUSE_ERRORS_ROW, "ERRORS ");
+    draw_dec3(12, PAUSE_ERRORS_ROW, mistakes);
     draw_text(1, 5, "------------------");
-    for (i = 0; i < 5; i++) {
+    for (i = 0; i < UI_PAUSE_COUNT; i++) {
         x = pause_item_x(i);
-        map_tile((uint8_t)(x - 2), (uint8_t)(6 + i),
-                 (uint8_t)((choice == i ? '>' : ' ') - 32));
-        map_tile((uint8_t)(x + text_w(PAUSE_ITEMS[i]) + 1), (uint8_t)(6 + i),
-                 (uint8_t)((choice == i ? '<' : ' ') - 32));
-        draw_text(x, (uint8_t)(6 + i), PAUSE_ITEMS[i]);
+        marker_pair_set((uint8_t)(x - 2),
+                        (uint8_t)(x + text_w(PAUSE_ITEMS[i]) + 1),
+                        (uint8_t)(PAUSE_FIRST_ITEM_ROW + i),
+                        (uint8_t)(choice == i));
+        draw_text(x, (uint8_t)(PAUSE_FIRST_ITEM_ROW + i), PAUSE_ITEMS[i]);
     }
     draw_text(1, 12, "------------------");
     draw_centered(14, "A EDIT B ERASE");
@@ -374,29 +408,34 @@ static void draw_pause_content(uint8_t choice, uint8_t lid, uint8_t diff)
     draw_centered(16, "A OK B BACKS OUT");
 }
 
-/* Draw the win screen content. */
-static void draw_win_content(uint8_t level, uint8_t is_last)
+/* Draw the win screen content.
+ * In: level 0-99 within diff, is_last 0/1, mistakes tally. */
+static void draw_win_content(uint8_t level, uint8_t is_last,
+                             uint8_t mistakes)
 {
-    draw_text(2, 2, "LEVEL ");
-    draw_dec3(8, 2, (uint8_t)(level + 1));
-    draw_text(11, 2, " CLEAR!");
+    draw_text(2, WIN_LEVEL_ROW, "LEVEL ");
+    draw_dec3(8, WIN_LEVEL_ROW, (uint8_t)(level + 1));
+    draw_text(11, WIN_LEVEL_ROW, " CLEAR!");
     draw_text(2, 4, "------------------");
     if (is_last) {
-        draw_text(1, 7, "YOU BEAT THE GAME!");
+        draw_text(1, WIN_MID_ROW, "YOU BEAT THE GAME!");
         draw_text(3, 9, "THANKS 4 PLAY!");
     } else {
         /* MISTAKES ddd = 12 wide, cols 4-15. */
-        draw_text(4, 7, "MISTAKES ");
-        draw_dec3(13, 7, board_errors());
+        draw_text(4, WIN_MID_ROW, "MISTAKES ");
+        draw_dec3(13, WIN_MID_ROW, mistakes);
     }
     draw_text(2, 15, "------------------");
     draw_text(4, 16, "A CONTINUE");
 }
 
 /* Move the 4 cursor sprites over grid cell (row, col). Sprite-only:
- * safe at any time (shadow OAM is copied during VBlank). */
+ * safe at any time (shadow OAM is copied during VBlank).
+ * In: row, col < GRID_SIZE. */
 static void cursor_place(uint8_t row, uint8_t col)
 {
+    /* Pixel origin of the cell's top-left tile + sprite offset.
+     * Multiplies run only on cursor moves (not per-frame): no LUT needed. */
     uint8_t x, y;
 
     x = (uint8_t)(DEVICE_SPRITE_PX_OFFSET_X + (GRID_X + col * 2) * 8);
@@ -417,10 +456,17 @@ static void cursor_sprites_off(void)
     }
 }
 
+/* ---------------------------------------------------------------------------
+ * Public screens (section 4 of 4). Each full screen follows
+ * begin_draw() -> content -> OAM prepare -> screen_present().
+ * Delta helpers (ui_*_cursor/page/cell/preview) write straight to the
+ * visible map or shadow OAM with the LCD on.
+ * -------------------------------------------------------------------------*/
+
 /* Init all video state once. Stops the LCD, loads every tile pattern
  * (tiles_load_resident stops it a second time: GBDK font_load
  * re-enables it on exit), parks all sprites and copies that to
- * hardware OAM. The LCD stays off: the first screen (ui_select from
+ * hardware OAM. The LCD stays off: the first screen (ui_diff from
  * main) presents it. Call once at startup. */
 void ui_init(void)
 {
@@ -453,28 +499,27 @@ void ui_diff(uint8_t choice, uint8_t has_load)
 }
 
 /* Difficulty navigation: move the marker pair (LCD stays on). Index
- * DIFF_COUNT addresses the LOAD row (shown only when a save exists). */
+ * DIFF_COUNT addresses the LOAD row (shown only when a save exists).
+ * In: old/new choice 0..DIFF_COUNT. */
 void ui_diff_cursor(uint8_t old_choice, uint8_t new_choice)
 {
     uint8_t w, x;
 
     if (old_choice == DIFF_COUNT) {
-        map_tile(6, 10, (uint8_t)(' ' - 32));
-        map_tile(13, 10, (uint8_t)(' ' - 32));
+        marker_pair_set(DIFF_LOAD_COL_L, DIFF_LOAD_COL_R, DIFF_LOAD_ROW, 0);
     } else {
         w = text_w(difficulty_name(old_choice));
         x = (uint8_t)((SCREEN_COLS - w) / 2);
-        map_tile((uint8_t)(x - 2), (uint8_t)(7 + old_choice), (uint8_t)(' ' - 32));
-        map_tile((uint8_t)(x + w + 1), (uint8_t)(7 + old_choice), (uint8_t)(' ' - 32));
+        marker_pair_set((uint8_t)(x - 2), (uint8_t)(x + w + 1),
+                        (uint8_t)(DIFF_FIRST_ROW + old_choice), 0);
     }
     if (new_choice == DIFF_COUNT) {
-        map_tile(6, 10, (uint8_t)('>' - 32));
-        map_tile(13, 10, (uint8_t)('<' - 32));
+        marker_pair_set(DIFF_LOAD_COL_L, DIFF_LOAD_COL_R, DIFF_LOAD_ROW, 1);
     } else {
         w = text_w(difficulty_name(new_choice));
         x = (uint8_t)((SCREEN_COLS - w) / 2);
-        map_tile((uint8_t)(x - 2), (uint8_t)(7 + new_choice), (uint8_t)('>' - 32));
-        map_tile((uint8_t)(x + w + 1), (uint8_t)(7 + new_choice), (uint8_t)('<' - 32));
+        marker_pair_set((uint8_t)(x - 2), (uint8_t)(x + w + 1),
+                        (uint8_t)(DIFF_FIRST_ROW + new_choice), 1);
     }
 }
 
@@ -491,14 +536,16 @@ void ui_select(uint8_t page, uint8_t row, const uint8_t *marks,
 }
 
 /* Level-select navigation: move the `<' status char between rows
- * (redraws the old row's real status), LCD stays on. */
+ * (redraws the old row's real status), LCD stays on.
+ * In: page 0..SELECT_PAGE_COUNT-1, rows < LEVELS_PER_PAGE. */
 void ui_select_cursor(uint8_t page, uint8_t old_row, uint8_t new_row,
                        const uint8_t *marks, uint8_t diff)
 {
-    map_tile(11, (uint8_t)(3 + old_row),
+    map_tile(SELECT_STATUS_X, (uint8_t)(SELECT_FIRST_ROW + old_row),
              select_status((uint8_t)(diff * DIFF_LEVELS +
                                      page * LEVELS_PER_PAGE + old_row), marks));
-    map_tile(11, (uint8_t)(3 + new_row), (uint8_t)('<' - 32));
+    map_tile(SELECT_STATUS_X, (uint8_t)(SELECT_FIRST_ROW + new_row),
+             (uint8_t)('<' - 32));
 }
 
 /* Select page change: page line + rows only (LCD stays on, no reload). */
@@ -525,38 +572,39 @@ void ui_game_full(uint8_t row, uint8_t col)
 
 /* START menu: status + RESUME/HINT/SAVE/PLAY AGAIN/MENU + help.
  * `lid` is the level number within the difficulty (0-99), `diff` the
- * difficulty. */
-void ui_pause(uint8_t choice, uint8_t lid, uint8_t diff)
+ * difficulty, `mistakes` the tally to show. Pure drawing: no board read. */
+void ui_pause(uint8_t choice, uint8_t lid, uint8_t diff, uint8_t mistakes)
 {
     begin_draw();
     map_fill_view(FONT_BLANK);
-    draw_pause_content(choice, lid, diff);
+    draw_pause_content(choice, lid, diff, mistakes);
     cursor_sprites_off();
     screen_present(LCDC_MENU);
 }
 
-/* Pause navigation: move the `>` marker (LCD stays on, no reload). */
+/* Pause navigation: move the marker pair (LCD stays on, no reload).
+ * In: old/new choice < UI_PAUSE_COUNT. */
 void ui_pause_cursor(uint8_t old_choice, uint8_t new_choice)
 {
-    uint8_t w, x;
+    uint8_t x;
 
-    w = text_w(PAUSE_ITEMS[old_choice]);
     x = pause_item_x(old_choice);
-    map_tile((uint8_t)(x - 2), (uint8_t)(6 + old_choice), (uint8_t)(' ' - 32));
-    map_tile((uint8_t)(x + w + 1), (uint8_t)(6 + old_choice), (uint8_t)(' ' - 32));
+    marker_pair_set((uint8_t)(x - 2),
+                    (uint8_t)(x + text_w(PAUSE_ITEMS[old_choice]) + 1),
+                    (uint8_t)(PAUSE_FIRST_ITEM_ROW + old_choice), 0);
     x = pause_item_x(new_choice);
-    map_tile((uint8_t)(x - 2), (uint8_t)(6 + new_choice), (uint8_t)('>' - 32));
-    map_tile((uint8_t)(x + text_w(PAUSE_ITEMS[new_choice]) + 1),
-             (uint8_t)(6 + new_choice), (uint8_t)('<' - 32));
+    marker_pair_set((uint8_t)(x - 2),
+                    (uint8_t)(x + text_w(PAUSE_ITEMS[new_choice]) + 1),
+                    (uint8_t)(PAUSE_FIRST_ITEM_ROW + new_choice), 1);
 }
 
 /* Win screen: level clear + mistake tally. `num` is the level number
- * within the difficulty (0-99). */
-void ui_win(uint8_t num, uint8_t is_last)
+ * within the difficulty (0-99). Pure drawing: no board read. */
+void ui_win(uint8_t num, uint8_t is_last, uint8_t mistakes)
 {
     begin_draw();
     map_fill_view(FONT_BLANK);
-    draw_win_content(num, is_last);
+    draw_win_content(num, is_last, mistakes);
     cursor_sprites_off();
     screen_present(LCDC_MENU);
 }

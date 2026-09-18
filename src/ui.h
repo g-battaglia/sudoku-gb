@@ -44,6 +44,10 @@
 /* Select pages (DIFF_LEVELS / LEVELS_PER_PAGE). */
 #define SELECT_PAGE_COUNT (DIFF_LEVELS / LEVELS_PER_PAGE)
 
+/* START menu items (single source of truth: main.c and ui.c share it).
+ * Order: RESUME / HINT / SAVE / PLAY AGAIN / MENU. */
+#define UI_PAUSE_COUNT 5
+
 /* Init all video state once (tiles, maps, sprites). The LCD stays off:
  * the first screen (ui_select from main) presents it. */
 void ui_init(void);
@@ -77,9 +81,10 @@ void ui_select_page(uint8_t page, uint8_t row, const uint8_t *marks,
 void ui_game_full(uint8_t row, uint8_t col);
 
 /* START menu. `choice` 0 = RESUME, 1 = HINT, 2 = SAVE, 3 = PLAY AGAIN,
- * 4 = MENU. Shows the level (number within the difficulty), difficulty
- * and mistake count. */
-void ui_pause(uint8_t choice, uint8_t lid, uint8_t diff);
+ * 4 = MENU (see UI_PAUSE_COUNT). Shows the level (number within the
+ * difficulty, 0-99), difficulty and mistake count (passed in: ui draws
+ * only, it never reads the board for status lines). */
+void ui_pause(uint8_t choice, uint8_t lid, uint8_t diff, uint8_t mistakes);
 
 /* Pause navigation (call after ui_pause, LCD stays on, no reload). */
 void ui_pause_cursor(uint8_t old_choice, uint8_t new_choice);
@@ -88,9 +93,10 @@ void ui_pause_cursor(uint8_t old_choice, uint8_t new_choice);
 void ui_saved(void);
 
 /* Win screen (`num` = level number within the difficulty, 0-99;
- * `is_last` = difficulty completed). Completion marks are stored in
- * the battery save. */
-void ui_win(uint8_t num, uint8_t is_last);
+ * `is_last` = difficulty completed; `mistakes` = final tally shown
+ * unless is_last. Completion marks are stored in the battery save
+ * by main.c, not here). */
+void ui_win(uint8_t num, uint8_t is_last, uint8_t mistakes);
 
 /* --- Game screen updates (no full clear, called every frame) --- */
 

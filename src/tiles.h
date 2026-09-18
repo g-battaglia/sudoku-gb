@@ -18,14 +18,16 @@
 #define TR_BASE 38
 #define BL_BASE 114
 #define BR_BASE 152
-#define TILE_COUNT 230
+#define TILE_COUNT 230 /* 228 cell variants + 2 margin tiles below */
 
 /* Margin tiles: 2px vertical frame lines for columns 0 and 19. */
 #define MARGIN_LEFT_TILE 228
 #define MARGIN_RIGHT_TILE 229
 
 /* First sprite id and first sprite VRAM tile of the 16x16 cursor
- * (uses 4 consecutive sprite ids and 4 consecutive sprite tiles). */
+ * (uses 4 consecutive sprite ids and 4 consecutive sprite tiles).
+ * Tiles 230-239 stay unused: BG grid ends at 229, sprite tiles live at
+ * 240+ (different VRAM region use, kept apart on purpose). */
 #define CURSOR_SPRITE_ID 0
 #define CURSOR_SPRITE_TILE 240
 

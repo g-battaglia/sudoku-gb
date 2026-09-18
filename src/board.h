@@ -36,47 +36,50 @@
 #define ORIGIN_GIVEN 1 /* black, locked clue */
 #define ORIGIN_HINT 2 /* gray, locked reveal */
 
-/* Load level `level` (0-based, 0-299): reset grid and mistakes. */
+/* Load level `level` (0-based, must be < LEVEL_COUNT):
+ * reset grid and mistakes. */
 void board_load(uint16_t level);
 
-/* Value of cell `idx` (0-80, row by row): 0 = empty, 1-9 = digit. */
+/* Value of cell `idx` (must be < CELL_COUNT): 0 = empty, 1-9 = digit. */
 uint8_t board_get(uint8_t idx);
 
-/* Return 1 if cell `idx` is an original clue (renders black). */
+/* Return 1 if cell `idx` is an original clue (renders black), else 0. */
 uint8_t board_is_original(uint8_t idx);
 
-/* Return 1 if cell `idx` is not editable (clue or hint reveal). */
+/* Return 1 if cell `idx` is not editable (clue or hint reveal), else 0. */
 uint8_t board_is_locked(uint8_t idx);
 
-/* Write `value` (0-9) into cell `idx`. No checks here: the caller must
- * call board_conflicts() BEFORE accepting the move. */
+/* Write `value` (0-9) into cell `idx` (both in range). No checks here:
+ * the caller must call board_conflicts() BEFORE accepting the move. */
 void board_set(uint8_t idx, uint8_t value);
 
 /* Return 1 if the value in cell `idx` breaks the rules
- * (duplicate in row, column or 3x3 box), 0 if legal. */
+ * (duplicate in row, column or 3x3 box), 0 if legal.
+ * Cell must already hold the digit to test. */
 uint8_t board_conflicts(uint8_t idx);
 
-/* Return 1 if the grid is full and valid (level solved). */
+/* Return 1 if the grid is full and valid (level solved), else 0. */
 uint8_t board_is_solved(void);
 
-/* Mistakes made so far (0-255, saturates). */
+/* Mistakes made so far (0-255, saturates, never wraps). */
 uint8_t board_errors(void);
 
 /* Record one mistake. Play never ends: the count is only shown
  * in the START menu. */
 void board_add_mistake(void);
 
-/* Lock cell `idx` as a hint reveal (used by HINT: the revealed digit
- * renders gray but stays locked). */
+/* Lock cell `idx` (< CELL_COUNT) as a hint reveal (used by HINT:
+ * the revealed digit renders gray but stays locked). Cell must already
+ * hold the solution digit. */
 void board_reveal(uint8_t idx);
 
 /* Origin of cell `idx` (ORIGIN_* above) — used by the save code to
  * snapshot which digits are clues, hints or player entries. */
 uint8_t board_origin(uint8_t idx);
 
-/* Restore a full game in one shot (used by LOAD): copy values and
- * origins (81 bytes each, ORIGIN_* codes) and the mistake count.
- * Level bookkeeping stays in main.c. */
+/* Restore a full game in one shot (used by LOAD): copy values (0-9)
+ * and origins (81 bytes each, ORIGIN_* codes) and the mistake count.
+ * Level bookkeeping stays in main.c. Callers pass validated SRAM data. */
 void board_restore(const uint8_t *values, const uint8_t *origins,
                    uint8_t mistakes);
 
@@ -90,7 +93,8 @@ void marks_clear(uint8_t *bm);
 void marks_set(uint8_t *bm, uint16_t level);
 uint8_t marks_get(const uint8_t *bm, uint16_t level);
 
-/* Number of set marks among levels first..first+n-1 (DONE x/100). */
+/* Number of set marks among levels [first, first+n).
+ * In: first + n <= LEVEL_COUNT. Out: 0..n. Used for DONE x/100. */
 uint8_t marks_count(const uint8_t *bm, uint16_t first, uint16_t n);
 
 #endif /* BOARD_H */

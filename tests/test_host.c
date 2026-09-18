@@ -1,12 +1,13 @@
 /* ---------------------------------------------------------------------------
  * tests/test_host.c — PC tests for the hardware-free modules.
  *
- * Compiles board.c + puzzles.c with gcc (NOT gbdk):
+ * Compiles board.c + puzzles.c + save_format.c with gcc (NOT gbdk):
  *   make test-host
  *
  * Checks: puzzle strings valid, solutions are valid Sudoku grids,
  * first 10 levels are introductory (>= 48 givens), board rules
- * (conflicts/win/origins), mistake counter, hint locking.
+ * (conflicts/win/origins), mistake counter, hint locking,
+ * marks bitmap, board restore, save image layout + field validation.
  * -------------------------------------------------------------------------*/
 
 #include <assert.h>
@@ -14,6 +15,7 @@
 
 #include "board.h"
 #include "puzzles.h"
+#include "save_format.h"
 #include "types.h"
 
 /* All puzzles: valid digits, enough givens, solution matches mask. */
@@ -78,29 +80,34 @@ static void test_conflicts(void)
     for (i = 0; i < CELL_COUNT; i++) {
         board_set(i, 0);
     }
-    /* Row duplicate. */
+    /* Row duplicate: cells 0 and 1 share row 0. */
     board_set(0, 5);
     board_set(1, 5);
     assert(board_conflicts(1) == 1);
+    assert(board_conflicts(0) == 1);
     board_set(1, 0);
     assert(board_conflicts(0) == 0);
-    /* Column duplicate. */
+    /* Column duplicate: cells 0 and 9 share column 0. */
     board_set(9, 5);
     assert(board_conflicts(9) == 1);
+    assert(board_conflicts(0) == 1);
     board_set(9, 0);
+    assert(board_conflicts(0) == 0);
     /* Box duplicate: cells 0 and 10 share the top-left box. */
     board_set(10, 5);
     assert(board_conflicts(10) == 1);
     board_set(10, 0);
+    assert(board_conflicts(0) == 0);
     /* Empty cell never conflicts. */
-    assert(board_conflicts(0) == 0 || board_get(0) != 0);
+    board_set(0, 0);
+    assert(board_conflicts(0) == 0);
     printf("conflicts OK\n");
 }
 
 /* Mistake counter: tallied forever, no game over. */
 static void test_mistakes(void)
 {
-    uint8_t i;
+    uint16_t i;
 
     board_load(0);
     assert(board_errors() == 0);
@@ -108,11 +115,9 @@ static void test_mistakes(void)
     board_add_mistake();
     board_add_mistake();
     assert(board_errors() == 3); /* 3 mistakes: still playing. */
-    for (i = 0; i < 250; i++) {
+    for (i = 0; i < 300; i++) {
         board_add_mistake();
     }
-    board_add_mistake();
-    board_add_mistake();
     assert(board_errors() == 255); /* Saturates, never wraps. */
     printf("mistakes OK\n");
 }
@@ -141,46 +146,48 @@ static void test_hint(void)
     printf("hint OK\n");
 }
 
+/* One group of 9 cells holds digits 1-9 exactly once. */
+static void check_unit9(const uint8_t *cells9)
+{
+    uint8_t seen[10] = {0};
+    uint8_t k, v;
+
+    for (k = 0; k < 9; k++) {
+        v = cells9[k];
+        assert(v >= 1 && v <= 9 && !seen[v]);
+        seen[v] = 1;
+    }
+}
+
 /* Every stored solution is a valid Sudoku grid: each row, column
  * and 3x3 box holds the digits 1-9 exactly once. */
 static void test_solutions_valid(void)
 {
     uint16_t level;
-    uint8_t r, c, v;
-    uint8_t seen[10];
+    uint8_t r, c, dr, dc;
+    uint8_t cells9[9];
 
     for (level = 0; level < LEVEL_COUNT; level++) {
         for (r = 0; r < 9; r++) {
-            for (v = 0; v < 10; v++) {
-                seen[v] = 0;
-            }
             for (c = 0; c < 9; c++) {
-                v = puzzle_solution(level, (uint8_t)(r * 9 + c));
-                assert(v >= 1 && v <= 9 && !seen[v]);
-                seen[v] = 1;
+                cells9[c] = puzzle_solution(level, (uint8_t)(r * 9 + c));
             }
-            for (v = 0; v < 10; v++) {
-                seen[v] = 0;
-            }
+            check_unit9(cells9);
             for (c = 0; c < 9; c++) {
-                v = puzzle_solution(level, (uint8_t)(c * 9 + r));
-                assert(v >= 1 && v <= 9 && !seen[v]);
-                seen[v] = 1;
+                cells9[c] = puzzle_solution(level, (uint8_t)(c * 9 + r));
             }
+            check_unit9(cells9);
         }
         for (r = 0; r < 9; r += 3) {
             for (c = 0; c < 9; c += 3) {
-                uint8_t dr, dc;
-                for (v = 0; v < 10; v++) {
-                    seen[v] = 0;
-                }
+                uint8_t k = 0;
                 for (dr = 0; dr < 3; dr++) {
                     for (dc = 0; dc < 3; dc++) {
-                        v = puzzle_solution(level, (uint8_t)((r + dr) * 9 + c + dc));
-                        assert(v >= 1 && v <= 9 && !seen[v]);
-                        seen[v] = 1;
+                        cells9[k++] = puzzle_solution(
+                            level, (uint8_t)((r + dr) * 9 + c + dc));
                     }
                 }
+                check_unit9(cells9);
             }
         }
     }
@@ -256,6 +263,46 @@ static void test_board_restore(void)
     printf("board restore OK\n");
 }
 
+/* Save image layout: offsets cover the whole image with no overlap,
+ * checksum is the 8-bit sum, field validation rejects garbage. */
+static void test_save_format(void)
+{
+    uint8_t values[CELL_COUNT];
+    uint8_t origins[CELL_COUNT];
+    uint8_t bytes[4] = {'S', 'U', 'D', 'K'};
+    uint8_t i;
+
+    /* Layout: values + origins + fixed header fit exactly before checksum. */
+    assert(SAVE_OFF_VALUES + CELL_COUNT == SAVE_OFF_ORIGINS);
+    assert(SAVE_OFF_ORIGINS + CELL_COUNT == SAVE_OFF_MISTAKES);
+    assert(SAVE_OFF_MARKS + MARKS_BYTES == SAVE_OFF_CHECKSUM);
+    assert(SAVE_OFF_CHECKSUM + 1 == SAVE_IMAGE_SIZE);
+    assert(SAVE_IMAGE_SIZE == 0xD2);
+    assert(MARKS_BYTES == 38);
+
+    /* Checksum: plain 8-bit sum. */
+    assert(save_checksum(bytes, 4) == (uint8_t)('S' + 'U' + 'D' + 'K'));
+    assert(save_checksum(bytes, 0) == 0);
+
+    /* Valid fields pass. */
+    for (i = 0; i < CELL_COUNT; i++) {
+        values[i] = (uint8_t)(i % 10);
+        origins[i] = (uint8_t)(i % 3);
+    }
+    assert(save_fields_valid(0, 1, values, origins) == 1);
+    assert(save_fields_valid((uint16_t)(LEVEL_COUNT - 1), 0, values,
+                             origins) == 1);
+    /* Out-of-range fields fail: level, active flag, digit, origin. */
+    assert(save_fields_valid(LEVEL_COUNT, 1, values, origins) == 0);
+    assert(save_fields_valid(0, 2, values, origins) == 0);
+    values[0] = 10;
+    assert(save_fields_valid(0, 1, values, origins) == 0);
+    values[0] = 0;
+    origins[0] = 3;
+    assert(save_fields_valid(0, 1, values, origins) == 0);
+    printf("save format OK\n");
+}
+
 int main(void)
 {
     test_puzzles_valid();
@@ -266,6 +313,7 @@ int main(void)
     test_hint();
     test_marks();
     test_board_restore();
+    test_save_format();
     printf("ALL HOST TESTS PASSED\n");
     return 0;
 }

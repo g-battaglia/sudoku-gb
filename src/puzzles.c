@@ -4,7 +4,8 @@
  * puzzles.c — Packed level helpers. No hardware dependencies.
  * -------------------------------------------------------------------------*/
 
-/* Solution digit 1-9 of cell `idx` in level `level`. Even cells live in
+/* Solution digit 1-9 of cell `idx` in level `level`.
+ * In: level < LEVEL_COUNT, idx < CELL_COUNT. Even cells live in
  * the high nibble of byte idx/2, odd cells in the low nibble. */
 uint8_t puzzle_solution(uint16_t level, uint8_t idx)
 {
@@ -18,16 +19,19 @@ uint8_t puzzle_solution(uint16_t level, uint8_t idx)
 }
 
 /* Givens digit of cell `idx`: the solution digit if the mask keeps it,
- * else 0 (empty). Bit idx lives in byte idx/8, bit idx%8. */
+ * else 0 (empty). Bit idx lives in byte idx/8, bit idx%8.
+ * In: level < LEVEL_COUNT, idx < CELL_COUNT. */
 uint8_t puzzle_given(uint16_t level, uint8_t idx)
 {
-    if (puzzles[level].givens_mask[idx >> 3] & (uint8_t)(1 << (idx & 7))) {
+    if (puzzles[level].givens_mask[idx >> 3] & (uint8_t)(1u << (idx & 7))) {
         return puzzle_solution(level, idx);
     }
     return 0;
 }
 
-/* Return the printable difficulty name. */
+/* Return the printable difficulty name ("EASY"/"MEDIUM"/"HARD").
+ * In: diff is DIFF_EASY/DIFF_MEDIUM/DIFF_HARD. Out: "?????" fallback
+ * for out-of-range values (never happens in normal flow). */
 const char *difficulty_name(uint8_t diff)
 {
     switch (diff) {

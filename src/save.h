@@ -26,14 +26,17 @@ typedef struct {
     uint8_t marks[MARKS_BYTES];  /* level completion bitmap */
 } SaveSlot;
 
-/* Return 1 if SRAM holds a valid save (magic + version + checksum). */
+/* Return 1 if SRAM holds a plausible save header
+ * (magic + version + checksum), else 0. Fast probe for the LOAD row. */
 uint8_t save_present(void);
 
-/* Read the slot from SRAM into *slot. Returns 1 on success, 0 if the
- * save is invalid (caller must not use *slot then). */
+/* Read the slot from SRAM into *slot. Returns 1 on success (header +
+ * field ranges valid: level < LEVEL_COUNT, values 0-9, origins
+ * ORIGIN_*), 0 if the save is invalid (caller must not use *slot then). */
 uint8_t save_read(SaveSlot *slot);
 
-/* Write *slot to SRAM (adds magic, version and checksum). */
+/* Write *slot to SRAM (adds magic, version and checksum).
+ * In: slot fields in range (see save_read). */
 void save_write(const SaveSlot *slot);
 
 #endif /* SAVE_H */

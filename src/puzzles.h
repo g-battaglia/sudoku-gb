@@ -46,13 +46,16 @@ typedef struct {
 extern const Puzzle puzzles[LEVEL_COUNT];
 
 /* Solution digit 1-9 of cell `idx` (0-80) in level `level` (0-299:
- * uint16_t, a uint8_t cannot address 300 levels). */
+ * uint16_t, a uint8_t cannot address 300 levels). Both in range. */
 uint8_t puzzle_solution(uint16_t level, uint8_t idx);
 
-/* Givens digit of cell `idx` in level `level` (0 = empty cell). */
+/* Givens digit of cell `idx` in level `level` (0 = empty cell).
+ * Both in range. */
 uint8_t puzzle_given(uint16_t level, uint8_t idx);
 
-/* Printable difficulty name ("EASY", "MEDIUM", "HARD"). */
+/* Printable difficulty name ("EASY", "MEDIUM", "HARD").
+ * In: DIFF_EASY/DIFF_MEDIUM/DIFF_HARD (uint8_t by choice: keeps SDCC
+ * calling convention uniform; values are tiny). Out: "?????" fallback. */
 const char *difficulty_name(uint8_t diff);
 
 #endif /* PUZZLES_H */

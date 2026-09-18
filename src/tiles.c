@@ -35,19 +35,22 @@
  * Cursor: 4 sprites (8x8 corner pieces) forming a 2px 16x16 outline.
  * -------------------------------------------------------------------------*/
 
-/* Box gap (black 2px) after columns 2/5/8, else inner line (gray 2px). */
+/* Box gap (black 2px) after columns 2/5/8, else inner line (gray 2px).
+ * In: col < GRID_SIZE. Out: 1 = box gap, 0 = inner line. */
 static uint8_t right_is_box(uint8_t col)
 {
     return (col == 2 || col == 5 || col == 8) ? 1 : 0;
 }
 
-/* Box gap (black 2px) after rows 2/5/8, else inner line (gray 2px). */
+/* Box gap (black 2px) after rows 2/5/8, else inner line (gray 2px).
+ * In: row < GRID_SIZE. Out: 1 = box gap, 0 = inner line. */
 static uint8_t bottom_is_box(uint8_t row)
 {
     return (row == 2 || row == 5 || row == 8) ? 1 : 0;
 }
 
-/* Content index: 0 = empty, 1-9 = given digit, 10-18 = user digit. */
+/* Content index: 0 = empty, 1-9 = given digit, 10-18 = user digit.
+ * In: value 0-9, is_user 0/1. Out: 0-18. */
 static uint8_t content_of(uint8_t value, uint8_t is_user)
 {
     if (value == 0) {
@@ -60,6 +63,11 @@ static uint8_t content_of(uint8_t value, uint8_t is_user)
 }
 
 /* Load every tile pattern once (see tiles.h for the layout).
+ * Boot-only: ~3.7KB byte copy is fine here (not per-frame).
+ * Hand-rolled loop instead of memcpy/set_bkg_data: GBDK's block loader
+ * silently dropped the low tile range on big loads (tiles 0-114 came
+ * out zero), while a plain loop just works. No extra ROM cost worth
+ * chasing: this runs once at boot.
  * 1. GBDK font_init/font_load decompress the font to 0x9000 tiles 0-95
  *    (font_init forces signed text mode, so the loader's LCDC-bit-4
  *    check picks the 0x9000 base; first font claims tiles from 0).
